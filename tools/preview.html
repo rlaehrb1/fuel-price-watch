@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>미리보기</title>
+</head>
+<body>
+<script type="module">
+  // Chrome 없이 팝업·설정 화면을 보는 개발용 틀. tools/sample.json을 저장소처럼 쓴다.
+  // 사용: 이 폴더를 웹 서버로 열고 tools/preview.html?page=popup 또는 ?page=options
+  const page = new URLSearchParams(location.search).get('page') === 'options' ? 'options' : 'popup';
+  const store = await (await fetch('/tools/sample.json')).json();
+  const listeners = [];
+  window.chrome = {
+    storage: {
+      local: {
+        async get(keys) {
+          const names = Array.isArray(keys) ? keys : [keys];
+          return Object.fromEntries(names.filter((key) => key in store).map((key) => [key, store[key]]));
+        },
+        async set(values) {
+          Object.assign(store, values);
+          for (const listener of listeners) listener({}, 'local');
+        }
+      },
+      onChanged: { addListener: (listener) => listeners.push(listener) }
+    },
+    runtime: {
+      async sendMessage(message) {
+        if (message.type === 'toggleWatch') {
+          const watched = new Set(store.settings.watched || []);
+          if (watched.has(message.id)) watched.delete(message.id); else watched.add(message.id);
+          await window.chrome.storage.local.set({ settings: { ...store.settings, watched: [...watched] } });
+          return { ok: true };
+        }
+        if (message.type === 'refresh') return { ok: true, skipped: true, reason: '미리보기에서는 확인하지 않습니다.' };
+        if (message.type === 'listAreas') return { ok: true, areas: [{ code: '0601', name: '전주시' }, { code: '0606', name: '김제시' }, { code: '0621', name: '완주군' }] };
+        return { ok: true, stations: [] };
+      },
+      openOptionsPage() { location.search = '?page=options'; }
+    }
+  };
+  const html = await (await fetch(`/${page}.html`)).text();
+  document.open();
+  document.write(html.replace('<head>', '<head><base href="/">'));
+  document.close();
+</script>
+</body>
+</html>

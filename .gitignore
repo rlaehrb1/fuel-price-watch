@@ -1,0 +1,4 @@
+# API 키가 들어 있는 개인 설정. 저장소에 올리지 않는다.
+local-config.json
+tools/sample.json
+node_modules/

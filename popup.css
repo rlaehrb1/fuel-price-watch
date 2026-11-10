@@ -1,0 +1,177 @@
+:root {
+  --bg: #ffffff;
+  --panel: #f5f6f8;
+  --line: #e2e5ea;
+  --text: #1b1f24;
+  --muted: #68717d;
+  --accent: #0b6bcb;
+  --accent-soft: #e6f0fb;
+  --up: #c5221f;
+  --down: #1967d2;
+  --mine: #fff6df;
+  --star: #e8a400;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #17191d;
+    --panel: #22252b;
+    --line: #333842;
+    --text: #e8eaed;
+    --muted: #9aa3af;
+    --accent: #7db7ff;
+    --accent-soft: #1f2f45;
+    --up: #ff8a80;
+    --down: #8ab4f8;
+    --mine: #3a3220;
+    --star: #f5c04a;
+  }
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+
+body {
+  margin: 0;
+  width: 460px;
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.45 "Malgun Gothic", "Apple SD Gothic Neo", system-ui, sans-serif;
+}
+
+body.page { width: auto; max-width: 640px; margin: 0 auto; padding: 24px 16px 48px; }
+
+.muted { color: var(--muted); }
+
+.top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px 8px;
+}
+.who { flex: 1; min-width: 0; }
+.who h1 { margin: 0; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.who p { margin: 0; font-size: 12px; }
+
+.btn {
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font: inherit;
+  cursor: pointer;
+}
+.btn:hover { border-color: var(--accent); }
+.btn:disabled { opacity: .55; cursor: default; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: 600; }
+.btn.ghost { background: transparent; padding: 6px 8px; }
+
+.notice {
+  margin: 0 14px 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  font-size: 12px;
+}
+.notice.error { background: transparent; border: 1px solid var(--up); color: var(--up); }
+
+.tabs { display: flex; gap: 2px; padding: 0 14px; border-bottom: 1px solid var(--line); }
+.tabs button {
+  flex: 1;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--muted);
+  padding: 8px 2px;
+  font: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.tabs button.on { color: var(--accent); border-bottom-color: var(--accent); font-weight: 700; }
+
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.seg button {
+  border: 0;
+  background: none;
+  color: var(--muted);
+  padding: 4px 10px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button.on { background: var(--accent-soft); color: var(--accent); font-weight: 700; }
+#subTabs { margin: 10px 14px 0; }
+
+.summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 10px 14px 6px; }
+.stat { background: var(--panel); border-radius: 10px; padding: 8px 10px; min-width: 0; }
+.stat .label { font-size: 11px; color: var(--muted); }
+.stat .value { font-size: 17px; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.stat .value small { font-size: 11px; font-weight: 400; color: var(--muted); }
+.stat .sub { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.controls { display: flex; justify-content: space-between; padding: 6px 14px; }
+
+.list-wrap { max-height: 300px; overflow-y: auto; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.list { width: 100%; border-collapse: collapse; }
+.list td { padding: 6px 4px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.list tr:last-child td { border-bottom: 0; }
+.list tr.row { cursor: pointer; }
+.list tr.row:hover { background: var(--panel); }
+.list tr.mine { background: var(--mine); }
+.list td.star { width: 30px; padding-left: 10px; }
+.list td.name { min-width: 0; }
+.list td.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.list td.price { font-weight: 700; font-size: 14px; }
+.list td.last { padding-right: 14px; width: 64px; }
+
+.star-btn { border: 0; background: none; cursor: pointer; font-size: 15px; color: var(--muted); padding: 0; line-height: 1; }
+.star-btn.on { color: var(--star); }
+
+.name .title { font-weight: 600; }
+.name .meta { font-size: 11px; color: var(--muted); }
+.tag { display: inline-block; font-size: 10px; padding: 0 5px; border-radius: 6px; background: var(--accent-soft); color: var(--accent); margin-left: 4px; font-weight: 600; }
+.tag.me { background: var(--star); color: #1b1f24; }
+
+.up { color: var(--up); }
+.down { color: var(--down); }
+.change { font-size: 11px; }
+
+.history td { background: var(--panel); font-size: 12px; padding: 6px 14px 8px 40px; }
+.history ul { margin: 0; padding: 0; list-style: none; }
+
+.empty { padding: 18px 14px; margin: 0; text-align: center; }
+
+.events { padding: 8px 14px 4px; }
+.events summary { cursor: pointer; font-weight: 600; }
+.events ul { margin: 6px 0 0; padding: 0; list-style: none; max-height: 130px; overflow-y: auto; }
+.events li { padding: 3px 0; font-size: 12px; display: flex; gap: 8px; }
+.events li .when { color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+.foot { display: flex; justify-content: space-between; padding: 8px 14px 12px; font-size: 11px; }
+
+/* 설정 화면 */
+.page h1 { font-size: 20px; margin: 0 0 4px; }
+.page h2 { font-size: 14px; margin: 24px 0 8px; }
+.page .card { border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
+.page label { display: block; font-weight: 600; margin-bottom: 4px; }
+.page .hint { font-size: 12px; color: var(--muted); margin: 4px 0 0; }
+.page input[type="text"], .page input[type="password"], .page select {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+.page .line { display: flex; gap: 8px; align-items: center; }
+.page .line > input, .page .line > select { flex: 1; }
+.page .checks { display: flex; flex-wrap: wrap; gap: 6px 16px; }
+.page .checks label { font-weight: 400; margin: 0; display: flex; gap: 6px; align-items: center; }
+.page .results { list-style: none; margin: 8px 0 0; padding: 0; }
+.page .results li { display: flex; gap: 8px; align-items: center; padding: 6px 0; border-top: 1px solid var(--line); }
+.page .results li div { flex: 1; min-width: 0; }
+.page .current { margin: 0 0 8px; }
+.page .save-row { margin-top: 24px; display: flex; gap: 12px; align-items: center; }

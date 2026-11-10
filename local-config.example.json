@@ -1,0 +1,8 @@
+{
+  "apiKey": "오피넷에서 받은 키",
+  "station": { "id": "A0000000", "name": "내 주유소", "x": 0, "y": 0 },
+  "extraCenters": [],
+  "city": { "code": "0601", "name": "전주시" },
+  "taxfreeArea": { "code": "0606", "name": "김제시" },
+  "radius": 5000
+}

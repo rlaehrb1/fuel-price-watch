@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>주유소 가격 감시</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header class="top">
+    <div class="who">
+      <h1 id="stationName">주유소 가격 감시</h1>
+      <p id="checkedAt" class="muted"></p>
+    </div>
+    <button id="refresh" class="btn" type="button">지금 확인</button>
+    <button id="openOptions" class="btn ghost" type="button" title="설정" aria-label="설정">⚙</button>
+  </header>
+
+  <p id="notice" class="notice" hidden></p>
+
+  <nav id="tabs" class="tabs" role="tablist"></nav>
+  <div id="subTabs" class="seg" hidden></div>
+
+  <section id="summary" class="summary"></section>
+
+  <div class="controls">
+    <div class="seg" id="sortSeg">
+      <button type="button" data-sort="price" class="on">가격순</button>
+      <button type="button" data-sort="dist">거리순</button>
+    </div>
+    <div class="seg" id="filterSeg">
+      <button type="button" data-filter="all" class="on">전체</button>
+      <button type="button" data-filter="watched">감시만</button>
+      <button type="button" data-filter="top" id="filterTop">최저 20</button>
+    </div>
+  </div>
+
+  <div class="list-wrap">
+    <table class="list">
+      <tbody id="rows"></tbody>
+    </table>
+    <p id="empty" class="muted empty" hidden>아직 받은 가격이 없습니다.</p>
+  </div>
+
+  <details class="events" id="eventsBox">
+    <summary>최근 가격 변동 <span id="eventCount" class="muted"></span></summary>
+    <ul id="events"></ul>
+  </details>
+
+  <footer class="foot muted">
+    <span id="calls"></span>
+    <span>자료: 오피넷(한국석유공사)</span>
+  </footer>
+
+  <script type="module" src="popup.js"></script>
+</body>
+</html>
