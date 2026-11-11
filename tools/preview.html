@@ -33,6 +33,10 @@
           await window.chrome.storage.local.set({ settings: { ...store.settings, watched: [...watched] } });
           return { ok: true };
         }
+        if (message.type === 'setPaused') {
+          await window.chrome.storage.local.set({ paused: message.paused });
+          return { ok: true, paused: message.paused };
+        }
         if (message.type === 'refresh') return { ok: true, skipped: true, reason: '미리보기에서는 확인하지 않습니다.' };
         if (message.type === 'listAreas') return { ok: true, areas: [{ code: '0601', name: '전주시' }, { code: '0606', name: '김제시' }, { code: '0621', name: '완주군' }] };
         return { ok: true, stations: [] };

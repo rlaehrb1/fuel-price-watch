@@ -18,6 +18,7 @@ const API_BASE = 'https://www.opinet.co.kr/api/';
 const ALARM_NAME = 'price-check';
 const ALARM_PERIOD_MINUTES = 15;
 const MANUAL_GAP_MS = 5 * 60 * 1000;
+const AVERAGE_RETRY_MS = 60 * 60 * 1000;
 const NOTIFICATION_ID = 'price-change';
 
 let inflight = null;
@@ -26,7 +27,11 @@ chrome.runtime.onInstalled.addListener(() => { void start(); });
 chrome.runtime.onStartup.addListener(() => { void start(); });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === ALARM_NAME) refresh({ force: false }).catch(() => {});
+  if (alarm.name !== ALARM_NAME) return;
+  isPaused().then((paused) => {
+    if (!paused) return refresh({ force: false });
+    return undefined;
+  }).catch(() => {});
 });
 
 chrome.notifications.onClicked.addListener((id) => {
@@ -47,6 +52,8 @@ async function handleMessage(message) {
       return refresh({ force: true });
     case 'seen':
       return markSeen();
+    case 'setPaused':
+      return setPaused(Boolean(message.paused));
     case 'toggleWatch':
       return toggleWatch(message.id);
     case 'searchStation':
@@ -65,7 +72,26 @@ async function start() {
   await ensureSettings();
   const alarm = await chrome.alarms.get(ALARM_NAME);
   if (!alarm) await chrome.alarms.create(ALARM_NAME, { periodInMinutes: ALARM_PERIOD_MINUTES });
-  await refresh({ force: false }).catch(() => {});
+  if (!(await isPaused())) await refresh({ force: false }).catch(() => {});
+  else await updateBadge(await getState(), await getSettings());
+}
+
+// 자동 조회 중지 여부. 설정 화면이 저장할 때 덮어쓰지 않도록 settings와 따로 둔다.
+async function isPaused() {
+  const { paused } = await chrome.storage.local.get('paused');
+  return paused === true;
+}
+
+async function setPaused(paused) {
+  await chrome.storage.local.set({ paused });
+  if (!paused) {
+    // 다시 시작하면 갱신 시각과 관계없이 바로 한 번 확인한다.
+    const result = await refresh({ force: true, ignoreGap: true }).catch((error) => ({ error: describe(error) }));
+    await updateBadge(await getState(), await getSettings());
+    return { paused, ...result };
+  }
+  await updateBadge(await getState(), await getSettings());
+  return { paused };
 }
 
 async function getSettings() {
@@ -133,7 +159,7 @@ async function runRefresh({ force, ignoreGap = false }) {
   if (!settings.apiKey || !settings.station) {
     return { skipped: true, reason: '설정에서 API 키와 내 주유소를 먼저 정해 주세요.' };
   }
-  if (!force && !shouldFetch(state.fetchedAt, now)) return { skipped: true };
+  if (!force && !shouldFetch(state.fetchedAt, now)) return retryAverage(settings, state, now);
   if (force && !ignoreGap && state.fetchedAt && now - state.fetchedAt < MANUAL_GAP_MS) {
     return { skipped: true, reason: '방금 확인했습니다. 5분 뒤에 다시 눌러 주세요.' };
   }
@@ -189,15 +215,43 @@ async function fetchAll(settings) {
       lists[prod] = { near: [], top };
     }
   }
-  let average = {};
-  if (settings.city) {
-    const code = settings.city.code;
-    average = parseAverages(await callApi('avgSigunPrice.do', { sido: code.slice(0, 2), sigun: code }, apiKey));
-  }
-  return { lists, average };
+  return { lists, average: await fetchAverage(settings) };
+}
+
+// 시·군 평균가격. 빈 응답이 오면 한 번 더 요청한다.
+async function fetchAverage(settings) {
+  if (!settings.city) return {};
+  const code = settings.city.code;
+  const params = { sido: code.slice(0, 2), sigun: code };
+  const first = parseAverages(await callApi('avgSigunPrice.do', params, settings.apiKey));
+  if (Object.keys(first).length) return first;
+  return parseAverages(await callApi('avgSigunPrice.do', params, settings.apiKey));
+}
+
+function averageMissing(state, settings) {
+  return Boolean(settings.city) && settings.products.some((prod) => !state.average[prod]);
+}
+
+// 정기 확인 사이에 평균만 비어 있으면 평균만 다시 받는다(1시간에 한 번까지).
+async function retryAverage(settings, state, now) {
+  if (!averageMissing(state, settings)) return { skipped: true };
+  if (state.averageTriedAt && now - state.averageTriedAt < AVERAGE_RETRY_MS) return { skipped: true };
+  await chrome.storage.local.set({ state: { ...state, averageTriedAt: now } });
+  const average = await fetchAverage(settings);
+  const latest = await getState();
+  await chrome.storage.local.set({
+    state: { ...latest, averageTriedAt: now, average: { ...latest.average, ...average } }
+  });
+  return { skipped: true, average: Object.keys(average).length > 0 };
 }
 
 async function updateBadge(state, settings) {
+  if (await isPaused()) {
+    await chrome.action.setBadgeText({ text: '중지' });
+    await chrome.action.setBadgeBackgroundColor({ color: '#80868b' });
+    await chrome.action.setTitle({ title: '주유소 가격 감시: 자동 조회 중지됨' });
+    return;
+  }
   const badge = badgeInfo(state, settings);
   await chrome.action.setBadgeText({ text: badge.text });
   await chrome.action.setBadgeBackgroundColor({ color: badge.alert ? '#c5221f' : '#5f6368' });

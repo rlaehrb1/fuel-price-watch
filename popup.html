@@ -10,9 +10,13 @@
   <header class="top">
     <div class="who">
       <h1 id="stationName">주유소 가격 감시</h1>
-      <p id="checkedAt" class="muted"></p>
+      <p class="status-line">
+        <span id="autoStatus" class="auto-status"><span class="dot"></span><span id="autoText"></span></span>
+        <span id="checkedAt" class="muted"></span>
+      </p>
     </div>
-    <button id="refresh" class="btn" type="button">지금 확인</button>
+    <button id="refresh" class="btn primary" type="button">지금 확인</button>
+    <button id="pauseToggle" class="btn stop" type="button">조회중지</button>
     <button id="openOptions" class="btn ghost" type="button" title="설정" aria-label="설정">⚙</button>
   </header>
 

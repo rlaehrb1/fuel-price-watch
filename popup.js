@@ -21,6 +21,7 @@ const view = {
   settings: { ...DEFAULT_SETTINGS },
   state: emptyState(),
   calls: null,
+  paused: false,
   tab: null,
   taxfreeProd: null,
   sort: 'price',
@@ -41,10 +42,11 @@ function send(message) {
 }
 
 async function load() {
-  const stored = await chrome.storage.local.get(['settings', 'state', 'calls']);
+  const stored = await chrome.storage.local.get(['settings', 'state', 'calls', 'paused']);
   view.settings = { ...DEFAULT_SETTINGS, ...(stored.settings || {}) };
   view.state = { ...emptyState(), ...(stored.state || {}) };
   view.calls = stored.calls || null;
+  view.paused = stored.paused === true;
   if (!view.tab || (view.tab !== TAXFREE_TAB && !view.settings.products.includes(view.tab))) {
     view.tab = view.settings.products[0] || TAXFREE_TAB;
   }
@@ -63,6 +65,7 @@ function render() {
   const taxfree = view.tab === TAXFREE_TAB;
   $('stationName').textContent = settings.station ? settings.station.name : '주유소 가격 감시';
   $('checkedAt').textContent = state.fetchedAt ? `${formatKst(state.fetchedAt)} 확인` : '아직 확인하지 않음';
+  renderPause();
 
   renderNotice();
   renderTabs();
@@ -287,6 +290,33 @@ $('refresh').addEventListener('click', async () => {
 });
 
 $('openOptions').addEventListener('click', () => chrome.runtime.openOptionsPage());
+
+function renderPause() {
+  const button = $('pauseToggle');
+  if (button.disabled) return;
+  button.textContent = view.paused ? '조회시작' : '조회중지';
+  button.className = `btn ${view.paused ? 'go' : 'stop'}`;
+  button.title = view.paused ? '자동 조회를 다시 시작합니다' : '정해진 시각의 자동 조회를 멈춥니다';
+  $('autoStatus').classList.toggle('paused', view.paused);
+  $('autoText').textContent = view.paused ? '자동 조회 중지됨' : '자동 조회 중';
+}
+
+$('pauseToggle').addEventListener('click', async () => {
+  const button = $('pauseToggle');
+  const next = !view.paused;
+  button.disabled = true;
+  button.textContent = next ? '중지 중…' : '시작 중…';
+  try {
+    const result = await send({ type: 'setPaused', paused: next });
+    view.message = !result.ok ? result.error
+      : next ? '자동 조회를 멈췄습니다. 지금 확인은 계속 쓸 수 있습니다.'
+        : result.changed ? `자동 조회를 다시 시작했습니다. 가격 변동 ${result.changed}건을 찾았습니다.`
+          : '자동 조회를 다시 시작했습니다.';
+  } finally {
+    button.disabled = false;
+    await load();
+  }
+});
 
 $('sortSeg').addEventListener('click', (event) => {
   const mode = event.target.dataset.sort;
