@@ -5,11 +5,14 @@ import {
   EVENT_KEEP_DAYS,
   PRODUCTS,
   PRODUCT_NAMES,
+  STATION_EVENT_NAMES,
   TAXFREE_PRODUCTS,
   callsToday,
   dailySeries,
   dayLabel,
   dayRange,
+  detailFeatures,
+  emptyDetails,
   emptyHistory,
   emptyState,
   eventKey,
@@ -20,7 +23,11 @@ import {
   groupEventsByDay,
   kstClock,
   kstDate,
+  lagText,
   lastDays,
+  leaderStats,
+  matchesQuery,
+  reactionsTo,
   sortRows,
   summarize,
   toCsv,
@@ -39,17 +46,23 @@ const view = {
   settings: { ...DEFAULT_SETTINGS },
   state: emptyState(),
   history: emptyHistory(),
+  details: emptyDetails(),
   calls: null,
   paused: false,
-  mode: 'prices', // prices | changes | trend
+  mode: 'prices', // prices | changes | trend | rivals
   tab: null,
   changeTab: ALL_TAB,
   trendTab: null,
+  rivalTab: null,
+  rivalPart: 'lead', // lead | roster
+  leadScope: 'watched', // watched | all
+  newStations: 0,
   range: 30,
   trendSeries: [],
   taxfreeProd: null,
   sort: 'price',
   filter: 'all',
+  query: '', // 가격표 주유소 검색어
   scope: 'all', // 변동 보기: all | watched
   openRow: null,
   jumpTo: null,
@@ -69,7 +82,9 @@ function readPrefs() {
 
 function savePrefs() {
   try {
-    localStorage.setItem(PREFS_KEY, JSON.stringify({ mode: view.mode, scope: view.scope, range: view.range }));
+    localStorage.setItem(PREFS_KEY, JSON.stringify({
+      mode: view.mode, scope: view.scope, range: view.range, rivalPart: view.rivalPart, leadScope: view.leadScope
+    }));
   } catch {
     // 기억하지 못해도 화면은 그대로 쓴다.
   }
@@ -91,16 +106,18 @@ function prefersReducedMotion() {
 }
 
 async function load() {
-  const stored = await chrome.storage.local.get(['settings', 'state', 'history', 'calls', 'paused']);
+  const stored = await chrome.storage.local.get(['settings', 'state', 'history', 'stationDetails', 'calls', 'paused']);
   view.settings = { ...DEFAULT_SETTINGS, ...(stored.settings || {}) };
   view.state = { ...emptyState(), ...(stored.state || {}) };
   view.history = { ...emptyHistory(), ...(stored.history || {}) };
+  view.details = { ...emptyDetails(), ...(stored.stationDetails || {}) };
   view.calls = stored.calls || null;
   view.paused = stored.paused === true;
   if (!view.tab || (view.tab !== TAXFREE_TAB && !view.settings.products.includes(view.tab))) {
     view.tab = view.settings.products[0] || TAXFREE_TAB;
   }
   if (!view.settings.products.includes(view.trendTab)) view.trendTab = view.settings.products[0] || null;
+  if (!view.settings.products.includes(view.rivalTab)) view.rivalTab = view.settings.products[0] || null;
   if (view.changeTab !== ALL_TAB && !changeTabs().some(([code]) => code === view.changeTab)) {
     view.changeTab = ALL_TAB;
   }
@@ -149,9 +166,11 @@ function render() {
   $('pricesView').hidden = view.mode !== 'prices';
   $('changesView').hidden = view.mode !== 'changes';
   $('trendView').hidden = view.mode !== 'trend';
+  $('rivalsView').hidden = view.mode !== 'rivals';
   if (view.mode === 'prices') renderPrices(now);
   else if (view.mode === 'changes') renderChanges(now);
-  else renderTrend(now);
+  else if (view.mode === 'trend') renderTrend(now);
+  else renderRivals(now);
 
   $('calls').textContent = `오늘 오피넷 호출 ${callsToday(view.calls, now)} / ${DAILY_LIMIT}`;
 }
@@ -181,23 +200,32 @@ function renderSwitch(now) {
   const badge = $('changeBadge');
   const today = kstDate(now);
   const todayCount = view.state.events.filter((event) => kstDate(event.at) === today).length;
+  // 숫자만 짧게 보여준다. 빨간색은 감시 주유소의 새 변동, 회색은 오늘 변동 수.
   if (view.newKeys.size) {
-    badge.textContent = `새 ${view.newKeys.size}`;
+    badge.textContent = String(view.newKeys.size);
     badge.title = `감시 주유소의 새 가격 변동 ${view.newKeys.size}건`;
   } else {
-    badge.textContent = `오늘 ${todayCount}`;
+    badge.textContent = String(todayCount);
     badge.title = `오늘 가격 변동 ${todayCount}건`;
   }
   badge.classList.toggle('new', view.newKeys.size > 0);
   badge.hidden = !view.newKeys.size && !todayCount;
+
+  const rivalBadge = $('rivalBadge');
+  const unseenStations = view.state.unseenStations || 0;
+  rivalBadge.hidden = !unseenStations;
+  rivalBadge.textContent = String(unseenStations);
+  rivalBadge.title = `주변 주유소 변화 ${unseenStations}건`;
 }
 
 function renderTabs() {
   const tabs = $('tabs');
   tabs.replaceChildren();
   const { mode } = view;
-  const current = mode === 'changes' ? view.changeTab : mode === 'trend' ? view.trendTab : view.tab;
-  const entries = mode === 'changes' ? changeTabs() : mode === 'trend' ? trendTabs() : priceTabs();
+  const current = mode === 'changes' ? view.changeTab : mode === 'trend' ? view.trendTab
+    : mode === 'rivals' ? view.rivalTab : view.tab;
+  const entries = mode === 'changes' ? changeTabs() : mode === 'trend' || mode === 'rivals' ? trendTabs() : priceTabs();
+  tabs.hidden = mode === 'rivals' && view.rivalPart === 'roster';
   for (const [code, label] of entries) {
     const button = el('button', code === current ? 'on' : '', label);
     button.type = 'button';
@@ -206,6 +234,7 @@ function renderTabs() {
     button.addEventListener('click', () => {
       if (mode === 'changes') view.changeTab = code;
       else if (mode === 'trend') view.trendTab = code;
+      else if (mode === 'rivals') view.rivalTab = code;
       else view.tab = code;
       view.openRow = null;
       render();
@@ -294,9 +323,12 @@ function renderRows(summary, prod, now) {
   let rows = summary.rows;
   if (view.filter === 'watched') rows = rows.filter((row) => row.watched || row.mine);
   if (view.filter === 'top') rows = rows.filter((row) => row.topRank || row.mine);
+  const query = view.query.trim();
+  if (query) rows = rows.filter((row) => matchesQuery(row, query));
   rows = sortRows(rows, view.sort);
   $('empty').hidden = rows.length > 0;
-  $('empty').textContent = summary.rows.length ? '조건에 맞는 주유소가 없습니다.' : '아직 받은 가격이 없습니다.';
+  $('empty').textContent = !summary.rows.length ? '아직 받은 가격이 없습니다.'
+    : query ? `"${query}"와 맞는 주유소가 없습니다.` : '조건에 맞는 주유소가 없습니다.';
 
   let jumpRow = null;
   for (const row of rows) {
@@ -361,6 +393,13 @@ function historyRow(row, prod, now) {
   td.colSpan = 5;
   const past = view.state.events.filter((event) => event.id === row.id && event.prod === prod).slice(0, 8);
   if (row.addr) td.append(el('div', 'muted', row.addr));
+  const detail = view.details.items[row.id];
+  if (detail && !detail.missing) {
+    const line = el('div', 'detail-line');
+    for (const feature of detailFeatures(detail)) line.append(el('span', 'chip', feature));
+    if (detail.tel) line.append(el('span', 'muted', `☎ ${detail.tel}`));
+    if (line.children.length) td.append(line);
+  }
   if (!past.length) {
     td.append(el('div', 'muted', '설치한 뒤로 가격 변동이 없습니다.'));
   } else {
@@ -559,7 +598,7 @@ function feedEntry(entry, { myId, watched, showProd }) {
 // 변동 목록에서 주유소를 누르면 가격표의 그 제품 탭으로 가서 기록을 펼친다.
 function jumpToStation(id, prod) {
   const { settings } = view;
-  if (view.changeTab !== ALL_TAB && view.changeTab !== TAXFREE_TAB) prod = view.changeTab;
+  if (view.mode === 'changes' && view.changeTab !== ALL_TAB && view.changeTab !== TAXFREE_TAB) prod = view.changeTab;
   if (isTaxfreeProd(prod)) {
     if (!hasTaxfree() || !settings.taxfreeProducts.includes(prod)) return;
     view.tab = TAXFREE_TAB;
@@ -571,6 +610,7 @@ function jumpToStation(id, prod) {
   }
   view.mode = 'prices';
   view.filter = 'all';
+  setQuery('');
   view.openRow = id;
   view.jumpTo = id;
   savePrefs();
@@ -806,6 +846,206 @@ function renderTrendTable(series, now) {
   }
 }
 
+/* ───────── 경쟁사: 누가 먼저 · 주유소 변화 ───────── */
+
+const STYLE_NAMES = { leader: '먼저 움직임', middle: '그때그때', follower: '따라가는 편', few: '기록 부족' };
+
+function myStationId() {
+  return view.settings.station ? view.settings.station.id : null;
+}
+
+// 분석에 넣을 주유소: 감시만이면 감시 주유소와 내 주유소, 반경 전체면 반경 안 명단(면세유·시 최저가 목록만 나온 곳 제외).
+function leadIds(prod) {
+  const { settings, state } = view;
+  const myId = myStationId();
+  if (view.leadScope === 'watched') return new Set([myId, ...(settings.watched || [])].filter(Boolean));
+  const roster = Object.keys(state.roster || {});
+  const ids = roster.length ? roster : Object.keys(state.prices[prod] || {});
+  return new Set([...ids, myId].filter(Boolean));
+}
+
+function stationCell(id) {
+  const td = el('td');
+  const line = el('div', 'nm');
+  if ((view.settings.watched || []).includes(id)) line.append(el('span', 'star-mark', '★'));
+  line.append(el('span', 'label', stationName(id)));
+  if (id === myStationId()) line.append(el('span', 'tag me', '나'));
+  td.append(line);
+  const station = view.state.stations[id] || {};
+  const meta = [BRANDS[station.brand] || station.brand, formatDistance(station.dist)].filter(Boolean).join(' · ');
+  if (meta) td.append(el('div', 'meta', meta));
+  return td;
+}
+
+function valueCell(main, sub) {
+  const td = el('td', main === '–' ? 'none' : '');
+  td.append(el('div', '', main));
+  if (sub) td.append(el('div', 'sub', sub));
+  return td;
+}
+
+function renderRivals(now) {
+  for (const button of $('rivalSeg').children) button.classList.toggle('on', button.dataset.part === view.rivalPart);
+  for (const button of $('leadScopeSeg').children) button.classList.toggle('on', button.dataset.scope === view.leadScope);
+  const count = $('rosterCount');
+  count.hidden = !view.newStations;
+  count.textContent = String(view.newStations);
+  $('leadScopeSeg').hidden = view.rivalPart !== 'lead';
+  $('leadPart').hidden = view.rivalPart !== 'lead';
+  $('rosterPart').hidden = view.rivalPart !== 'roster';
+  if (view.rivalPart === 'lead') renderLead();
+  else renderRoster(now);
+}
+
+function renderLead() {
+  const { state } = view;
+  const prod = view.rivalTab;
+  const myId = myStationId();
+  const ids = leadIds(prod);
+  const all = view.leadScope === 'all';
+
+  // 내가 바꾼 뒤 따라온 곳
+  const reactions = reactionsTo(state.events, prod, myId, [...ids]);
+  const { count } = reactions;
+  const mineMoves = count.up + count.down;
+  $('reactSpan').textContent = mineMoves ? `내 변동: 인하 ${count.down}번 · 인상 ${count.up}번` : '';
+  let reactRows = reactions.rows;
+  if (all) reactRows = reactRows.filter((row) => row.up.followed + row.down.followed > 0).slice(0, 15);
+  const reactBody = $('reactRows');
+  reactBody.replaceChildren();
+  $('reactTable').hidden = !mineMoves || !reactRows.length;
+  $('reactEmpty').hidden = mineMoves > 0 && reactRows.length > 0;
+  $('reactEmpty').textContent = !mineMoves
+    ? `최근 90일 동안 내 ${PRODUCTS[prod] || ''} 가격을 바꾼 기록이 없습니다.`
+    : all ? '내가 바꾼 뒤 3일 안에 같은 방향으로 따라 바꾼 곳이 없습니다.' : '감시 주유소가 없습니다. 가격표에서 ☆를 눌러 감시할 곳을 고르세요.';
+  const reactCell = (part, total) => {
+    if (!total) return valueCell('–');
+    return valueCell(`${part.followed}/${total}번`, part.followed ? `평균 ${lagText(part.avgLag)} 뒤` : '안 따라옴');
+  };
+  for (const row of reactRows) {
+    const tr = el('tr');
+    tr.append(stationCell(row.id), reactCell(row.down, count.down), reactCell(row.up, count.up));
+    tr.title = '가격표에서 보기';
+    tr.addEventListener('click', () => jumpToStation(row.id, prod));
+    reactBody.append(tr);
+  }
+
+  // 먼저 바꾼 곳
+  const lead = leaderStats(state.events, prod, ids);
+  $('leadSpan').textContent = lead.waves ? `함께 움직인 흐름 ${lead.waves}번 (인상 ${lead.up} · 인하 ${lead.down})` : '';
+  let leadRows = lead.rows.filter((row) => row.joined > 0);
+  if (all) leadRows = leadRows.slice(0, 20);
+  const leadBody = $('leadRows');
+  leadBody.replaceChildren();
+  $('leadTable').hidden = !leadRows.length;
+  $('leadEmpty').hidden = leadRows.length > 0;
+  $('leadEmpty').textContent = '여러 주유소가 함께 가격을 바꾼 기록이 아직 없습니다. 변동 기록이 쌓이면 나타납니다.';
+  for (const row of leadRows) {
+    const tr = el('tr', row.id === myId ? 'mine' : '');
+    const split = [row.leadUp ? `인상 ${row.leadUp}` : '', row.leadDown ? `인하 ${row.leadDown}` : ''].filter(Boolean).join(' · ');
+    const styleCell = el('td');
+    styleCell.append(el('span', `style-tag ${row.style}`, STYLE_NAMES[row.style]));
+    tr.append(
+      stationCell(row.id),
+      valueCell(`${row.lead}/${row.joined}번`, split),
+      valueCell(row.follow ? `${row.follow}번` : '–', row.follow ? `평균 ${lagText(row.avgLag)} 뒤` : ''),
+      styleCell
+    );
+    tr.title = '가격표에서 보기';
+    tr.addEventListener('click', () => jumpToStation(row.id, prod));
+    leadBody.append(tr);
+  }
+}
+
+function brandName(code) {
+  return BRANDS[code] || code || '상표 없음';
+}
+
+function stationEventDesc(event) {
+  const station = view.state.stations[event.id] || {};
+  switch (event.kind) {
+    case 'new':
+      return [brandName(event.to || station.brand), formatDistance(station.dist)].filter(Boolean).join(' · ');
+    case 'gone':
+      return '이틀 넘게 반경 검색에 나오지 않습니다(휴업·폐업 또는 가격 미등록).';
+    case 'back':
+      return '다시 반경 검색에 나옵니다.';
+    case 'brand':
+      return `${brandName(event.from)} → ${brandName(event.to)}`;
+    case 'rename':
+      return `${event.from} → ${event.to}`;
+    default:
+      return '';
+  }
+}
+
+function hasRegularPrice(id) {
+  return view.settings.products.find((prod) => (view.state.prices[prod] || {})[id] !== undefined) || null;
+}
+
+function renderRoster(now) {
+  const { state, details } = view;
+  const roster = state.roster || {};
+  const active = Object.keys(roster).filter((id) => !roster[id].gone);
+  const got = active.filter((id) => details.items[id] && !details.items[id].missing).length;
+  const summary = $('rosterSummary');
+  summary.replaceChildren();
+  if (!active.length) {
+    summary.textContent = '다음 확인 때 반경 안 주유소 명단을 만들고, 그 뒤로 새로 생기거나 사라진 곳, 상표가 바뀐 곳을 알려 드립니다.';
+  } else {
+    summary.append('반경 안 주유소 ', el('b', '', `${active.length}곳`), ' · 상세 정보 ', el('b', '', `${got}곳`), ' 받음');
+    if (got < active.length) summary.append(` · 나머지 ${active.length - got}곳은 확인할 때마다 조금씩(하루 60곳까지) 받습니다.`);
+  }
+
+  const list = $('stationFeed');
+  list.replaceChildren();
+  const events = state.stationEvents || [];
+  $('stationEmpty').hidden = events.length > 0;
+  $('stationEmpty').textContent = '아직 바뀐 곳이 없습니다. 면세유 주유소와 시 최저가 목록에만 나온 곳은 보지 않습니다.';
+  events.forEach((event, index) => {
+    const prod = hasRegularPrice(event.id);
+    const item = el('li', prod ? 'link' : '');
+    item.append(el('div', 'when', formatWhen(event.at, now)));
+    const body = el('div', 'body');
+    const name = el('div', 'nm');
+    name.append(el('span', `kind ${event.kind}`, STATION_EVENT_NAMES[event.kind] || event.kind), el('span', '', event.name));
+    if (index < view.newStations) name.append(el('span', 'tag new', '새'));
+    body.append(name, el('div', 'desc', stationEventDesc(event)));
+    item.append(body);
+    if (prod) {
+      item.title = '가격표에서 보기';
+      item.addEventListener('click', () => jumpToStation(event.id, prod));
+    }
+    list.append(item);
+  });
+}
+
+// 경쟁사 보기에 들어오면 새 주유소 변화를 본 것으로 표시한다(목록에는 "새"를 남겨 둔다).
+function enterRivals() {
+  const unseen = view.state.unseenStations || 0;
+  if (!unseen) return;
+  view.newStations = unseen;
+  view.rivalPart = 'roster';
+  view.state.unseenStations = 0;
+  void send({ type: 'seenStations' });
+}
+
+$('rivalSeg').addEventListener('click', (event) => {
+  const button = event.target.closest('button[data-part]');
+  if (!button || button.dataset.part === view.rivalPart) return;
+  view.rivalPart = button.dataset.part;
+  savePrefs();
+  render();
+});
+
+$('leadScopeSeg').addEventListener('click', (event) => {
+  const scope = event.target.dataset.scope;
+  if (!scope || scope === view.leadScope) return;
+  view.leadScope = scope;
+  savePrefs();
+  render();
+});
+
 /* ───────── CSV 저장 ───────── */
 
 function downloadCsv(name, rows) {
@@ -949,6 +1189,7 @@ $('viewSwitch').addEventListener('click', (event) => {
   if (!button || button.dataset.view === view.mode) return;
   view.mode = button.dataset.view;
   view.openRow = null;
+  if (view.mode === 'rivals') enterRivals();
   savePrefs();
   render();
 });
@@ -957,6 +1198,25 @@ $('sortSeg').addEventListener('click', (event) => {
   const mode = event.target.dataset.sort;
   if (!mode) return;
   view.sort = mode;
+  render();
+});
+
+function setQuery(text) {
+  view.query = text;
+  $('stationFilter').value = text;
+  $('stationFilter').closest('.search').classList.toggle('active', Boolean(text.trim()));
+}
+
+$('stationFilter').addEventListener('input', (event) => {
+  setQuery(event.target.value);
+  view.openRow = null;
+  render();
+});
+
+$('stationFilter').addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape' || !view.query) return;
+  event.preventDefault(); // 팝업이 닫히지 않게 검색어만 지운다
+  setQuery('');
   render();
 });
 
@@ -981,9 +1241,11 @@ chrome.storage.onChanged.addListener((changes, area) => {
 
 // 팝업을 열 때 아직 안 본 감시 주유소 변동을 기억해 두고 "새"로 표시한다. 새 변동이 있으면 변동 보기로 연다.
 const prefs = readPrefs();
-view.mode = ['changes', 'trend'].includes(prefs.mode) ? prefs.mode : 'prices';
+view.mode = ['changes', 'trend', 'rivals'].includes(prefs.mode) ? prefs.mode : 'prices';
 view.range = RANGES.includes(prefs.range) ? prefs.range : 30;
 view.scope = prefs.scope === 'watched' ? 'watched' : 'all';
+view.rivalPart = prefs.rivalPart === 'roster' ? 'roster' : 'lead';
+view.leadScope = prefs.leadScope === 'all' ? 'all' : 'watched';
 const opened = await chrome.storage.local.get(['settings', 'state']);
 const unseen = (opened.state && opened.state.unseen) || 0;
 if (unseen > 0) {
@@ -993,4 +1255,8 @@ if (unseen > 0) {
   view.mode = 'changes';
 }
 await load();
+if (view.mode === 'rivals' && view.state.unseenStations) {
+  enterRivals();
+  render();
+}
 void send({ type: 'seen' });

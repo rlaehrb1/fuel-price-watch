@@ -8,7 +8,7 @@
 </head>
 <body class="page">
   <h1>주유소 가격 감시 설정</h1>
-  <p class="muted">오피넷 무료 API는 하루 300건까지 부를 수 있습니다. 지금 설정으로는 한 번 확인할 때 <b id="perCheck">0</b>건, 하루에 약 <b id="perDay">0</b>건을 씁니다.</p>
+  <p class="muted">오피넷 무료 API는 하루 300건까지 부를 수 있습니다. 지금 설정으로는 한 번 확인할 때 <b id="perCheck">0</b>건, 하루에 약 <b id="perDay">0</b>건을 씁니다. 이 밖에 시 일일 평균에 하루 1건, 주변 주유소 상세 정보에 처음 며칠 동안 하루 60건까지 더 쓰며, 상세 정보는 그날 남은 정기 확인에 쓸 몫을 먼저 남겨 둔 뒤에만 받습니다.</p>
 
   <h2>오피넷 API 키</h2>
   <div class="card">
@@ -66,13 +66,25 @@
   <h2>알림</h2>
   <div class="card">
     <div class="checks">
-      <label><input id="notify" type="checkbox"> ★ 표시한 주유소가 가격을 바꾸면 알림 띄우기</label>
+      <label><input id="notify" type="checkbox"> ★ 표시한 주유소가 가격을 바꾸거나, 반경 안에 주유소가 새로 생기거나 사라지거나 상표를 바꾸면 알림 띄우기</label>
     </div>
   </div>
 
   <div class="save-row">
     <button id="save" class="btn primary" type="button">저장</button>
     <span id="saved" class="muted" role="status"></span>
+  </div>
+
+  <h2>백업·복원</h2>
+  <div class="card">
+    <p class="hint" style="margin-top:0">설정과 기록(가격 변동 90일, 하루 기록 1년, 주변 주유소 명단과 상세 정보)을 파일 하나로 저장합니다. 확장을 다시 깔거나 다른 PC로 옮길 때 불러오면 기록이 그대로 이어집니다. 확장은 평소에 이 파일을 보지 않고, 불러오기를 눌러 고를 때만 읽습니다.</p>
+    <div class="line" style="margin-top:10px">
+      <button id="backup" class="btn" type="button">백업 파일 저장</button>
+      <button id="restore" class="btn" type="button">백업 불러오기</button>
+      <input id="restoreFile" type="file" accept=".json,application/json" hidden>
+    </div>
+    <p class="hint">백업 파일에는 오피넷 API 키도 들어 있으니 다른 사람에게 주지 마세요. 불러오면 지금 기록은 파일 내용으로 바뀝니다.</p>
+    <p id="backupStatus" class="hint" role="status"></p>
   </div>
 
   <script type="module" src="options.js"></script>

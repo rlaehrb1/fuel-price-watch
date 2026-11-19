@@ -4,8 +4,12 @@ import {
   areaBackfillDate,
   badgeInfo,
   bumpCalls,
+  callsPerCheck,
   callsToday,
   defaultWatched,
+  detailBudget,
+  detailQueue,
+  emptyDetails,
   emptyHistory,
   emptyState,
   eventText,
@@ -14,9 +18,11 @@ import {
   mergeSnapshot,
   parseAreaDaily,
   parseAverages,
+  parseDetail,
   parseStations,
   recordDay,
   shouldFetch,
+  stationEventText,
   watchedEvents
 } from './lib.js';
 
@@ -26,6 +32,7 @@ const ALARM_PERIOD_MINUTES = 15;
 const MANUAL_GAP_MS = 5 * 60 * 1000;
 const AVERAGE_RETRY_MS = 60 * 60 * 1000;
 const NOTIFICATION_ID = 'price-change';
+const STATION_NOTIFICATION_ID = 'station-change';
 const AREA_RETRY_MS = 60 * 60 * 1000;
 const MAX_BACKFILL_CALLS = 14;
 
@@ -60,6 +67,12 @@ async function handleMessage(message) {
       return refresh({ force: true });
     case 'seen':
       return markSeen();
+    case 'seenStations':
+      return markStationsSeen();
+    case 'restored':
+      await chrome.notifications.clear(NOTIFICATION_ID);
+      await start();
+      return {};
     case 'setPaused':
       return setPaused(Boolean(message.paused));
     case 'toggleWatch':
@@ -182,7 +195,7 @@ async function runRefresh({ force, ignoreGap = false }) {
     const hasData = Object.values(fetched.lists).some((lists) => lists.near.length || lists.top.length);
     if (!hasData) throw new Error('오피넷에서 가격을 받지 못했습니다. API 키와 호출 한도를 확인해 주세요.');
 
-    const { state: next, events } = mergeSnapshot(state, fetched, now);
+    const { state: next, events, stationEvents } = mergeSnapshot(state, fetched, now);
     let watched = settings.watched;
     if (!Array.isArray(watched)) {
       watched = defaultWatched(next, settings.station.id);
@@ -190,11 +203,14 @@ async function runRefresh({ force, ignoreGap = false }) {
     }
     const alerts = watchedEvents(events, watched);
     next.unseen = (state.unseen || 0) + alerts.length;
+    next.unseenStations = (state.unseenStations || 0) + stationEvents.length;
     await chrome.storage.local.set({ state: next });
     await chrome.storage.local.set({ history: recordDay(await getHistory(), next, { ...settings, watched }, now) });
     await updateBadge(next, { ...settings, watched });
     if (settings.notify && alerts.length) notify(alerts);
+    if (settings.notify && stationEvents.length) notifyStations(stationEvents);
     await updateAreaHistory(settings, now).catch(() => {});
+    await updateDetails({ ...settings, watched }, now).catch(() => {});
     return { changed: events.length };
   } catch (error) {
     const failed = { ...(await getState()), lastError: { at: now, message: describe(error) } };
@@ -303,6 +319,60 @@ async function updateAreaHistory(settings, now) {
       }
     });
   }
+}
+
+async function getDetails() {
+  const { stationDetails } = await chrome.storage.local.get('stationDetails');
+  return { ...emptyDetails(), ...(stationDetails || {}) };
+}
+
+// 반경 안 주유소의 상세 정보(전화번호, 세차장·편의점 등). 주유소마다 한 번 받고 90일 뒤에 다시 받는다.
+// 하루 한도를 지키려고 한 번에 12곳, 하루 60곳까지만 받고 나머지는 다음 확인으로 미룬다.
+async function updateDetails(settings, now) {
+  if (!settings.apiKey) return;
+  const state = await getState();
+  const store = await getDetails();
+  const queue = detailQueue(state.roster, store.items, { watched: settings.watched, stations: state.stations, now });
+  if (!queue.length) return;
+  const { calls } = await chrome.storage.local.get('calls');
+  const allowed = detailBudget({
+    callsToday: callsToday(calls, now),
+    detailsToday: callsToday(store.calls, now),
+    perCheck: callsPerCheck(settings),
+    now
+  });
+  const items = { ...store.items };
+  let detailCalls = store.calls;
+  try {
+    for (const id of queue.slice(0, allowed)) {
+      const json = await callApi('detailById.do', { id }, settings.apiKey);
+      detailCalls = bumpCalls(detailCalls, now);
+      items[id] = parseDetail(json, now) || { at: now, missing: true };
+    }
+  } finally {
+    await chrome.storage.local.set({ stationDetails: { items, calls: detailCalls } });
+  }
+}
+
+function notifyStations(list) {
+  const lines = list.slice(0, 4).map(stationEventText);
+  if (list.length > 4) lines.push(`외 ${list.length - 4}건`);
+  chrome.notifications.create(STATION_NOTIFICATION_ID, {
+    type: 'basic',
+    iconUrl: chrome.runtime.getURL('icons/icon128.png'),
+    title: `주변 주유소 변화 ${list.length}건`,
+    message: lines.join('\n'),
+    priority: 1
+  });
+}
+
+async function markStationsSeen() {
+  const state = await getState();
+  if (state.unseenStations) {
+    state.unseenStations = 0;
+    await chrome.storage.local.set({ state });
+  }
+  return {};
 }
 
 async function updateBadge(state, settings) {

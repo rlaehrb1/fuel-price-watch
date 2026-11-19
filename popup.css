@@ -157,7 +157,42 @@ body.page { width: auto; max-width: 640px; margin: 0 auto; padding: 24px 16px 48
 .stat .value small { font-size: 11px; font-weight: 400; color: var(--muted); }
 .stat .sub { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-.controls { display: flex; justify-content: space-between; padding: 6px 14px; }
+.controls { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 14px; }
+
+.controls > .seg { flex: none; }
+
+/* 가격표 주유소 검색 */
+.search {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 150px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 27px;
+  padding: 0 4px 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--muted);
+  cursor: text;
+}
+.search:focus-within { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.search svg { flex: none; width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; }
+.search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  padding: 0;
+}
+.search input::placeholder { color: var(--muted); }
+.search input::-webkit-search-cancel-button { cursor: pointer; }
+.search.active { border-color: var(--accent); color: var(--accent); }
 
 .list-wrap { max-height: 300px; overflow-y: auto; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .list { width: 100%; border-collapse: collapse; }
@@ -190,44 +225,63 @@ body.page { width: auto; max-width: 640px; margin: 0 auto; padding: 24px 16px 48
 .empty { padding: 18px 14px; margin: 0; text-align: center; }
 
 /* 보기 전환 */
+/* 글자가 커져도 줄바꿈하지 않도록 칸 너비를 내용에 맞춰 나눈다. */
 .view-switch {
-  display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
-  gap: 3px;
+  display: flex;
+  gap: 2px;
   margin: 2px 14px 6px;
   padding: 3px;
   background: var(--panel);
-  border-radius: 10px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
 }
 .view-switch button {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: 5px;
+  height: 30px;
+  padding: 0 8px;
   border: 0;
   border-radius: 8px;
   background: none;
   color: var(--muted);
-  padding: 5px 8px;
   font: inherit;
   font-weight: 600;
+  white-space: nowrap;
   cursor: pointer;
+  transition: background-color .15s, color .15s;
 }
-.view-switch button:hover { color: var(--text); }
-.view-switch button.on { background: var(--bg); color: var(--text); box-shadow: 0 0 0 1px var(--line), 0 1px 2px rgba(0, 0, 0, .06); }
+.view-switch button:hover:not(.on) { color: var(--text); background: var(--line); }
+.view-switch button.on {
+  background: var(--bg);
+  color: var(--accent);
+  font-weight: 700;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .12), 0 0 0 1px var(--line);
+}
+.view-switch button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+@media (prefers-reduced-motion: reduce) { .view-switch button { transition: none; } }
 .count {
-  min-width: 18px;
-  padding: 0 6px;
+  flex: none;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 5px;
   border-radius: 999px;
   background: var(--line);
   color: var(--muted);
-  font-size: 11px;
+  font-size: 10.5px;
   font-weight: 700;
   line-height: 17px;
   text-align: center;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
+.view-switch button.on .count:not(.new) { background: var(--accent-soft); color: var(--accent); }
 .count.new { background: var(--up); color: var(--on-color); }
+.seg button { white-space: nowrap; display: inline-flex; align-items: center; gap: 5px; }
 
 /* 날짜별 막대 */
 .day-chart { padding: 8px 14px 2px; }
@@ -418,3 +472,52 @@ body.page { width: auto; max-width: 640px; margin: 0 auto; padding: 24px 16px 48
 .trend-table tr.on td { background: var(--accent-soft); }
 .trend-table td.sun { color: var(--up); }
 .trend-table .gap-up { font-weight: 700; }
+
+/* 가격표 펼침: 주유소 상세 */
+.detail-line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin: 3px 0 4px; }
+.chip { padding: 0 6px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); font-size: 11px; line-height: 17px; }
+
+/* 경쟁사: 누가 먼저 */
+.ana-scroll { max-height: 404px; overflow-y: auto; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.ana { padding: 8px 0 4px; }
+.ana + .ana { border-top: 1px solid var(--line); }
+.ana h3 { margin: 0 14px 4px; font-size: 12px; display: flex; align-items: baseline; gap: 8px; }
+.ana h3 .muted { margin-left: auto; font-size: 11px; font-weight: 400; }
+.ana-table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+.ana-table th { color: var(--muted); font-size: 11px; font-weight: 600; text-align: right; padding: 2px 8px; border-bottom: 1px solid var(--line); }
+.ana-table td { text-align: right; padding: 5px 8px; border-bottom: 1px solid var(--line); vertical-align: top; white-space: nowrap; }
+.ana-table tr:last-child td { border-bottom: 0; }
+.ana-table th:first-child, .ana-table td:first-child { text-align: left; padding-left: 14px; white-space: normal; }
+.ana-table th:last-child, .ana-table td:last-child { padding-right: 14px; }
+.ana-table tbody tr { cursor: pointer; }
+.ana-table tbody tr:hover td { background: var(--panel); }
+.ana-table tr.mine td { background: var(--mine); }
+.ana-table .nm { display: flex; align-items: center; gap: 3px; font-weight: 600; }
+.ana-table .nm .label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 150px; }
+.ana-table .meta, .ana-table .sub { font-size: 11px; color: var(--muted); font-weight: 400; }
+.ana-table .none { color: var(--muted); }
+.style-tag { display: inline-block; padding: 0 6px; border-radius: 6px; font-size: 11px; font-weight: 700; line-height: 18px; }
+.style-tag.leader { background: var(--up-soft); color: var(--up); }
+.style-tag.middle { background: var(--panel); color: var(--text); }
+.style-tag.follower { background: var(--down-soft); color: var(--down); }
+.style-tag.few { color: var(--muted); font-weight: 400; }
+.ana-empty { margin: 4px 14px 6px; font-size: 12px; }
+.ana-note { margin: 0; padding: 8px 14px 10px; font-size: 11px; border-top: 1px solid var(--line); line-height: 1.5; }
+
+/* 경쟁사: 주유소 변화 */
+.roster-summary { margin: 2px 14px 8px; font-size: 12px; color: var(--muted); }
+.roster-summary b { color: var(--text); }
+.station-feed { list-style: none; margin: 0; padding: 0; }
+.station-feed li { display: flex; gap: 10px; align-items: flex-start; padding: 8px 14px; border-bottom: 1px solid var(--line); }
+.station-feed li:last-child { border-bottom: 0; }
+.station-feed li.link { cursor: pointer; }
+.station-feed li.link:hover { background: var(--panel); }
+.station-feed .when { flex: none; width: 74px; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; padding-top: 2px; }
+.station-feed .body { flex: 1; min-width: 0; }
+.station-feed .nm { display: flex; align-items: center; gap: 5px; font-weight: 600; }
+.station-feed .desc { font-size: 12px; color: var(--muted); }
+.kind { flex: none; padding: 0 6px; border-radius: 6px; font-size: 11px; font-weight: 700; line-height: 18px; }
+.kind.new { background: var(--go-soft); color: var(--go); }
+.kind.gone { background: var(--up-soft); color: var(--up); }
+.kind.back { background: var(--panel); color: var(--muted); }
+.kind.brand, .kind.rename { background: var(--accent-soft); color: var(--accent); }

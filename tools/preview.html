@@ -73,6 +73,38 @@
       }
     }
     store.history = { days: {}, area, areaCode: settings.city.code, areaUpdatedOn: null, areaBackfillDone: true, areaTriedAt: 0 };
+
+    // 반경 안 명단과 주유소 변화, 상세 정보(일부만 받은 상태).
+    const nearIds = Object.entries(state.stations)
+      .filter(([, station]) => station.dist !== null && station.dist <= 5000)
+      .map(([id]) => id);
+    state.roster = Object.fromEntries(nearIds.map((id) => [id, {
+      name: state.stations[id].name, brand: state.stations[id].brand, firstSeen: now - 60 * DAY, lastSeen: slots[0]
+    }]));
+    state.rosterKey = [...regular].sort().join(',');
+    const pickNear = (index) => nearIds[index % nearIds.length];
+    const goneId = pickNear(17);
+    state.roster[goneId].gone = todayStart - 9 * DAY + 9 * HOUR + 10 * 60e3;
+    const stationEvent = (daysAgo, hour, id, kind, extra = {}) => ({
+      at: todayStart - daysAgo * DAY + hour * HOUR + 10 * 60e3, id, name: state.stations[id].name, kind, ...extra
+    });
+    state.stationEvents = [
+      stationEvent(0, 9, pickNear(23), 'new', { to: state.stations[pickNear(23)].brand }),
+      stationEvent(2, 12, pickNear(8), 'brand', { from: state.stations[pickNear(8)].brand === 'SKE' ? 'GSC' : 'SKE', to: state.stations[pickNear(8)].brand }),
+      stationEvent(9, 9, goneId, 'gone'),
+      stationEvent(21, 16, pickNear(31), 'rename', { from: '(구)한빛주유소', to: state.stations[pickNear(31)].name })
+    ];
+    state.unseenStations = 2;
+    const items = {};
+    nearIds.forEach((id, index) => {
+      if (index % 5 === 4) return;
+      items[id] = {
+        at: now - DAY, tel: `063-2${String(index).padStart(2, '0')}-${1000 + index * 37}`,
+        wash: rand() < 0.6, cvs: rand() < 0.3, maint: rand() < 0.2, kpetro: rand() < 0.4,
+        good: rand() < 0.15, good5: false, lpg: rand() < 0.1 ? 'C' : 'N', brand: state.stations[id].brand
+      };
+    });
+    store.stationDetails = { items, calls: null };
   }
   window.chrome = {
     storage: {
@@ -84,6 +116,9 @@
         async set(values) {
           Object.assign(store, values);
           for (const listener of listeners) listener({}, 'local');
+        },
+        async remove(keys) {
+          for (const key of [].concat(keys)) delete store[key];
         }
       },
       onChanged: { addListener: (listener) => listeners.push(listener) }
@@ -101,9 +136,14 @@
           return { ok: true, paused: message.paused };
         }
         if (message.type === 'refresh') return { ok: true, skipped: true, reason: '미리보기에서는 확인하지 않습니다.' };
+        if (message.type === 'seenStations') {
+          await window.chrome.storage.local.set({ state: { ...store.state, unseenStations: 0 } });
+          return { ok: true };
+        }
         if (message.type === 'listAreas') return { ok: true, areas: [{ code: '0601', name: '전주시' }, { code: '0606', name: '김제시' }, { code: '0621', name: '완주군' }] };
         return { ok: true, stations: [] };
       },
+      getManifest() { return { version: 'preview' }; },
       openOptionsPage() { location.search = '?page=options'; }
     }
   };

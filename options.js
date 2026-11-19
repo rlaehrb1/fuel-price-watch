@@ -1,4 +1,15 @@
-import { DEFAULT_SETTINGS, PRODUCTS, TAXFREE_PRODUCTS, UPDATE_HOURS, callsPerCheck } from './lib.js';
+import {
+  BACKUP_KEYS,
+  DEFAULT_SETTINGS,
+  PRODUCTS,
+  TAXFREE_PRODUCTS,
+  UPDATE_HOURS,
+  callsPerCheck,
+  formatKst,
+  kstDate,
+  makeBackup,
+  readBackup
+} from './lib.js';
 
 const $ = (id) => document.getElementById(id);
 let settings = { ...DEFAULT_SETTINGS };
@@ -201,6 +212,64 @@ $('save').addEventListener('click', async () => {
   $('saved').textContent = '저장했습니다. 가격을 다시 확인하는 중…';
   const result = await chrome.runtime.sendMessage({ type: 'settingsChanged', reset });
   $('saved').textContent = result.ok ? '저장했습니다.' : `저장했지만 가격 확인에 실패했습니다: ${result.error}`;
+});
+
+/* ───────── 백업·복원 ───────── */
+
+function backupStatus(text) {
+  $('backupStatus').textContent = text;
+}
+
+$('backup').addEventListener('click', async () => {
+  const now = Date.now();
+  const stored = await chrome.storage.local.get(BACKUP_KEYS);
+  const backup = makeBackup(stored, { version: chrome.runtime.getManifest().version, now });
+  const blob = new Blob([JSON.stringify(backup)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const link = Object.assign(document.createElement('a'), { href: url, download: `주유소가격감시_백업_${kstDate(now)}.json` });
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+  const events = (stored.state && stored.state.events) ? stored.state.events.length : 0;
+  const days = Object.keys((stored.history && stored.history.days) || {}).length;
+  backupStatus(`다운로드 폴더에 저장했습니다. (가격 변동 ${events}건, 하루 기록 ${days}일)`);
+});
+
+$('restore').addEventListener('click', () => $('restoreFile').click());
+
+$('restoreFile').addEventListener('change', async (event) => {
+  const file = event.target.files[0];
+  event.target.value = '';
+  if (!file) return;
+  let parsed;
+  try {
+    parsed = readBackup(await file.text());
+  } catch (error) {
+    backupStatus(error.message);
+    return;
+  }
+  const { summary, data } = parsed;
+  const when = summary.exportedAt ? formatKst(summary.exportedAt) : '날짜 모름';
+  const ok = window.confirm([
+    `${when}에 저장한 백업입니다${summary.station ? ` (${summary.station})` : ''}.`,
+    `가격 변동 ${summary.events}건 · 하루 기록 ${summary.days}일 · 주변 주유소 ${summary.stations}곳`,
+    '',
+    '지금 설정과 기록을 이 파일 내용으로 바꿀까요?'
+  ].join('\n'));
+  if (!ok) {
+    backupStatus('불러오기를 취소했습니다.');
+    return;
+  }
+  backupStatus('불러오는 중…');
+  const missing = BACKUP_KEYS.filter((key) => data[key] === undefined);
+  if (missing.length) await chrome.storage.local.remove(missing);
+  await chrome.storage.local.set(data);
+  const result = await chrome.runtime.sendMessage({ type: 'restored' });
+  await load();
+  backupStatus(result && result.ok
+    ? `불러왔습니다. 가격 변동 ${summary.events}건, 하루 기록 ${summary.days}일이 들어왔습니다.`
+    : `불러왔지만 가격 확인에 실패했습니다: ${result ? result.error : ''}`);
 });
 
 await load();

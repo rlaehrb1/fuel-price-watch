@@ -26,6 +26,7 @@
     <button type="button" role="tab" data-view="prices">가격표</button>
     <button type="button" role="tab" data-view="changes">가격 변동 <span id="changeBadge" class="count" hidden></span></button>
     <button type="button" role="tab" data-view="trend">추이</button>
+    <button type="button" role="tab" data-view="rivals">경쟁사 <span id="rivalBadge" class="count new" hidden></span></button>
   </div>
 
   <nav id="tabs" class="tabs" role="tablist"></nav>
@@ -39,6 +40,10 @@
         <button type="button" data-sort="price" class="on">가격순</button>
         <button type="button" data-sort="dist">거리순</button>
       </div>
+      <label class="search" title="주유소 이름·상표·주소로 찾기">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14"/></svg>
+        <input id="stationFilter" type="search" placeholder="검색" aria-label="주유소 검색" autocomplete="off" spellcheck="false">
+      </label>
       <div class="seg" id="filterSeg">
         <button type="button" data-filter="all" class="on">전체</button>
         <button type="button" data-filter="watched">감시만</button>
@@ -108,6 +113,47 @@
         </thead>
         <tbody id="trendRows"></tbody>
       </table>
+    </div>
+  </div>
+
+  <div id="rivalsView" hidden>
+    <div class="controls">
+      <div class="seg" id="rivalSeg">
+        <button type="button" data-part="lead">누가 먼저</button>
+        <button type="button" data-part="roster">주유소 변화 <span id="rosterCount" class="count new" hidden></span></button>
+      </div>
+      <div class="seg" id="leadScopeSeg">
+        <button type="button" data-scope="watched">감시만</button>
+        <button type="button" data-scope="all">반경 전체</button>
+      </div>
+    </div>
+
+    <div id="leadPart" class="ana-scroll">
+      <section class="ana">
+        <h3>내가 가격을 바꾼 뒤 <span id="reactSpan" class="muted"></span></h3>
+        <table class="ana-table" id="reactTable">
+          <thead><tr><th>주유소</th><th>내가 내린 뒤</th><th>내가 올린 뒤</th></tr></thead>
+          <tbody id="reactRows"></tbody>
+        </table>
+        <p id="reactEmpty" class="muted ana-empty" hidden></p>
+      </section>
+      <section class="ana">
+        <h3>먼저 바꾼 곳 <span id="leadSpan" class="muted"></span></h3>
+        <table class="ana-table" id="leadTable">
+          <thead><tr><th>주유소</th><th title="함께 움직인 흐름 중 처음 바꾼 횟수">먼저</th><th>따라감</th><th>성향</th></tr></thead>
+          <tbody id="leadRows"></tbody>
+        </table>
+        <p id="leadEmpty" class="muted ana-empty" hidden></p>
+      </section>
+      <p class="ana-note muted">최근 90일 변동 기록으로 셉니다. 같은 제품을 같은 방향으로 3일 안에 바꾼 것을 한 흐름으로 보고, 그 흐름에서 처음 확인된 곳을 "먼저"로 셉니다. 오피넷은 하루 6번 갱신되어 같은 시각에 바뀐 곳끼리는 순서를 가리지 않습니다. PC가 꺼져 있던 동안의 변동은 켠 뒤 처음 확인한 시각으로 잡힙니다.</p>
+    </div>
+
+    <div id="rosterPart">
+      <p id="rosterSummary" class="roster-summary"></p>
+      <div class="feed-wrap">
+        <ul id="stationFeed" class="station-feed"></ul>
+        <p id="stationEmpty" class="muted empty" hidden></p>
+      </div>
     </div>
   </div>
 
