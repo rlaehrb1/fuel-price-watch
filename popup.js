@@ -2,19 +2,29 @@ import {
   BRANDS,
   DAILY_LIMIT,
   DEFAULT_SETTINGS,
+  MAX_EVENTS,
   PRODUCTS,
+  PRODUCT_NAMES,
   TAXFREE_PRODUCTS,
   callsToday,
+  dayLabel,
+  dayRange,
   emptyState,
-  eventText,
+  eventKey,
   formatDistance,
   formatKst,
+  formatWhen,
+  groupEventsByDay,
+  kstClock,
+  kstDate,
   sortRows,
   summarize,
   won
 } from './lib.js';
 
 const TAXFREE_TAB = 'taxfree';
+const ALL_TAB = 'all';
+const PREFS_KEY = 'popupPrefs';
 const $ = (id) => document.getElementById(id);
 
 const view = {
@@ -22,13 +32,36 @@ const view = {
   state: emptyState(),
   calls: null,
   paused: false,
+  mode: 'prices', // prices | changes
   tab: null,
+  changeTab: ALL_TAB,
   taxfreeProd: null,
   sort: 'price',
   filter: 'all',
+  scope: 'all', // 변동 보기: all | watched
   openRow: null,
+  jumpTo: null,
+  activeDay: null,
+  newKeys: new Set(),
   message: ''
 };
+
+// 팝업 보기 선택은 이 브라우저에만 기억한다. 저장소를 못 쓰면 기본값으로 연다.
+function readPrefs() {
+  try {
+    return JSON.parse(localStorage.getItem(PREFS_KEY)) || {};
+  } catch {
+    return {};
+  }
+}
+
+function savePrefs() {
+  try {
+    localStorage.setItem(PREFS_KEY, JSON.stringify({ mode: view.mode, scope: view.scope }));
+  } catch {
+    // 기억하지 못해도 화면은 그대로 쓴다.
+  }
+}
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -41,6 +74,10 @@ function send(message) {
   return chrome.runtime.sendMessage(message);
 }
 
+function prefersReducedMotion() {
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
 async function load() {
   const stored = await chrome.storage.local.get(['settings', 'state', 'calls', 'paused']);
   view.settings = { ...DEFAULT_SETTINGS, ...(stored.settings || {}) };
@@ -49,6 +86,9 @@ async function load() {
   view.paused = stored.paused === true;
   if (!view.tab || (view.tab !== TAXFREE_TAB && !view.settings.products.includes(view.tab))) {
     view.tab = view.settings.products[0] || TAXFREE_TAB;
+  }
+  if (view.changeTab !== ALL_TAB && !changeTabs().some(([code]) => code === view.changeTab)) {
+    view.changeTab = ALL_TAB;
   }
   if (!view.settings.taxfreeProducts.includes(view.taxfreeProd)) {
     view.taxfreeProd = view.settings.taxfreeProducts.includes('D147') ? 'D147' : view.settings.taxfreeProducts[0];
@@ -60,33 +100,40 @@ function currentProduct() {
   return view.tab === TAXFREE_TAB ? view.taxfreeProd : view.tab;
 }
 
+function hasTaxfree() {
+  return Boolean(view.settings.taxfreeArea && view.settings.taxfreeProducts.length);
+}
+
+function taxfreeLabel() {
+  return `면세유(${view.settings.taxfreeArea.name.replace(/시$|군$/, '')})`;
+}
+
+function priceTabs() {
+  const entries = view.settings.products.map((code) => [code, PRODUCTS[code]]);
+  if (hasTaxfree()) entries.push([TAXFREE_TAB, taxfreeLabel()]);
+  return entries;
+}
+
+function changeTabs() {
+  return [[ALL_TAB, '전체'], ...priceTabs()];
+}
+
 function render() {
   const { settings, state } = view;
-  const taxfree = view.tab === TAXFREE_TAB;
+  const now = Date.now();
   $('stationName').textContent = settings.station ? settings.station.name : '주유소 가격 감시';
-  $('checkedAt').textContent = state.fetchedAt ? `${formatKst(state.fetchedAt)} 확인` : '아직 확인하지 않음';
+  $('checkedAt').textContent = state.fetchedAt ? `${formatWhen(state.fetchedAt, now)} 확인` : '아직 확인하지 않음';
   renderPause();
-
   renderNotice();
+  renderSwitch(now);
   renderTabs();
 
-  const prod = currentProduct();
-  const myId = settings.station ? settings.station.id : null;
-  const summary = summarize(state, prod, myId, settings.watched);
-  renderSummary(summary, taxfree);
+  $('pricesView').hidden = view.mode !== 'prices';
+  $('changesView').hidden = view.mode !== 'changes';
+  if (view.mode === 'prices') renderPrices(now);
+  else renderChanges(now);
 
-  const cityName = taxfree
-    ? (settings.taxfreeArea ? settings.taxfreeArea.name : '')
-    : (settings.city ? settings.city.name : '');
-  $('filterTop').textContent = cityName ? `${cityName} 최저 20` : '최저 20';
-  $('filterTop').hidden = taxfree;
-  if (taxfree && view.filter === 'top') view.filter = 'all';
-  for (const button of $('sortSeg').children) button.classList.toggle('on', button.dataset.sort === view.sort);
-  for (const button of $('filterSeg').children) button.classList.toggle('on', button.dataset.filter === view.filter);
-
-  renderRows(summary, prod);
-  renderEvents();
-  $('calls').textContent = `오늘 오피넷 호출 ${callsToday(view.calls, Date.now())} / ${DAILY_LIMIT}`;
+  $('calls').textContent = `오늘 오피넷 호출 ${callsToday(view.calls, now)} / ${DAILY_LIMIT}`;
 }
 
 function renderNotice() {
@@ -105,18 +152,39 @@ function renderNotice() {
   notice.classList.toggle('error', error);
 }
 
+function renderSwitch(now) {
+  for (const button of $('viewSwitch').children) {
+    const on = button.dataset.view === view.mode;
+    button.classList.toggle('on', on);
+    button.setAttribute('aria-selected', String(on));
+  }
+  const badge = $('changeBadge');
+  const today = kstDate(now);
+  const todayCount = view.state.events.filter((event) => kstDate(event.at) === today).length;
+  if (view.newKeys.size) {
+    badge.textContent = `새 ${view.newKeys.size}`;
+    badge.title = `감시 주유소의 새 가격 변동 ${view.newKeys.size}건`;
+  } else {
+    badge.textContent = `오늘 ${todayCount}`;
+    badge.title = `오늘 가격 변동 ${todayCount}건`;
+  }
+  badge.classList.toggle('new', view.newKeys.size > 0);
+  badge.hidden = !view.newKeys.size && !todayCount;
+}
+
 function renderTabs() {
   const tabs = $('tabs');
   tabs.replaceChildren();
-  const entries = view.settings.products.map((code) => [code, PRODUCTS[code]]);
-  if (view.settings.taxfreeArea && view.settings.taxfreeProducts.length) {
-    entries.push([TAXFREE_TAB, `면세유(${view.settings.taxfreeArea.name.replace(/시$|군$/, '')})`]);
-  }
-  for (const [code, label] of entries) {
-    const button = el('button', code === view.tab ? 'on' : '', label);
+  const changes = view.mode === 'changes';
+  const current = changes ? view.changeTab : view.tab;
+  for (const [code, label] of changes ? changeTabs() : priceTabs()) {
+    const button = el('button', code === current ? 'on' : '', label);
     button.type = 'button';
+    button.setAttribute('role', 'tab');
+    button.setAttribute('aria-selected', String(code === current));
     button.addEventListener('click', () => {
-      view.tab = code;
+      if (changes) view.changeTab = code;
+      else view.tab = code;
       view.openRow = null;
       render();
     });
@@ -124,7 +192,7 @@ function renderTabs() {
   }
 
   const sub = $('subTabs');
-  sub.hidden = view.tab !== TAXFREE_TAB;
+  sub.hidden = changes || view.tab !== TAXFREE_TAB;
   sub.replaceChildren();
   for (const code of view.settings.taxfreeProducts) {
     const button = el('button', code === view.taxfreeProd ? 'on' : '', TAXFREE_PRODUCTS[code]);
@@ -138,13 +206,35 @@ function renderTabs() {
   }
 }
 
+/* ───────── 가격표 ───────── */
+
+function renderPrices(now) {
+  const { settings, state } = view;
+  const taxfree = view.tab === TAXFREE_TAB;
+  const prod = currentProduct();
+  const myId = settings.station ? settings.station.id : null;
+  const summary = summarize(state, prod, myId, settings.watched);
+  renderSummary(summary, taxfree);
+
+  const cityName = taxfree
+    ? (settings.taxfreeArea ? settings.taxfreeArea.name : '')
+    : (settings.city ? settings.city.name : '');
+  $('filterTop').textContent = cityName ? `${cityName} 최저 20` : '최저 20';
+  $('filterTop').hidden = taxfree;
+  if (taxfree && view.filter === 'top') view.filter = 'all';
+  for (const button of $('sortSeg').children) button.classList.toggle('on', button.dataset.sort === view.sort);
+  for (const button of $('filterSeg').children) button.classList.toggle('on', button.dataset.filter === view.filter);
+
+  renderRows(summary, prod, now);
+}
+
 function stat(label, value, unit, sub) {
   const box = el('div', 'stat');
   box.append(el('div', 'label', label));
   const main = el('div', 'value', value);
   if (unit) main.append(el('small', '', ` ${unit}`));
   box.append(main);
-  box.append(el('div', 'sub', sub || ' '));
+  box.append(el('div', 'sub', sub || ' '));
   return box;
 }
 
@@ -176,7 +266,7 @@ function renderSummary(summary, taxfree) {
   );
 }
 
-function renderRows(summary, prod) {
+function renderRows(summary, prod, now) {
   const body = $('rows');
   body.replaceChildren();
   let rows = summary.rows;
@@ -186,8 +276,10 @@ function renderRows(summary, prod) {
   $('empty').hidden = rows.length > 0;
   $('empty').textContent = summary.rows.length ? '조건에 맞는 주유소가 없습니다.' : '아직 받은 가격이 없습니다.';
 
+  let jumpRow = null;
   for (const row of rows) {
     const tr = el('tr', `row${row.mine ? ' mine' : ''}`);
+    tr.dataset.id = row.id;
 
     const starCell = el('td', 'star');
     if (!row.mine) {
@@ -221,7 +313,7 @@ function renderRows(summary, prod) {
     if (row.change) {
       const delta = row.price - row.change.from;
       const mark = el('div', delta > 0 ? 'up' : 'down', `${delta > 0 ? '▲' : '▼'}${won(Math.abs(delta))}`);
-      changeCell.append(mark, el('div', 'muted', formatKst(row.change.at)));
+      changeCell.append(mark, el('div', 'muted', formatWhen(row.change.at, now)));
     }
 
     tr.append(starCell, nameCell, priceCell, diffCell, changeCell);
@@ -230,12 +322,18 @@ function renderRows(summary, prod) {
       render();
     });
     body.append(tr);
+    if (view.jumpTo === row.id) jumpRow = tr;
 
-    if (view.openRow === row.id) body.append(historyRow(row, prod));
+    if (view.openRow === row.id) body.append(historyRow(row, prod, now));
+  }
+
+  if (view.jumpTo) {
+    view.jumpTo = null;
+    if (jumpRow) jumpRow.scrollIntoView({ block: 'nearest' });
   }
 }
 
-function historyRow(row, prod) {
+function historyRow(row, prod, now) {
   const tr = el('tr', 'history');
   const td = el('td');
   td.colSpan = 5;
@@ -247,7 +345,7 @@ function historyRow(row, prod) {
     const list = el('ul');
     for (const event of past) {
       const delta = event.to - event.from;
-      const item = el('li', '', `${formatKst(event.at)}  ${won(event.from)} → ${won(event.to)} `);
+      const item = el('li', '', `${formatWhen(event.at, now)}  ${won(event.from)} → ${won(event.to)} `);
       item.append(el('span', delta > 0 ? 'up' : 'down', `${delta > 0 ? '▲' : '▼'}${won(Math.abs(delta))}`));
       list.append(item);
     }
@@ -257,20 +355,239 @@ function historyRow(row, prod) {
   return tr;
 }
 
-function renderEvents() {
-  const list = $('events');
-  list.replaceChildren();
-  const events = view.state.events.slice(0, 30);
-  $('eventCount').textContent = events.length ? `${view.state.events.length}건` : '없음';
-  const watched = new Set(view.settings.watched || []);
-  for (const event of events) {
-    const item = el('li');
-    item.append(el('span', 'when', formatKst(event.at)));
-    const text = el('span', '', `${watched.has(event.id) ? '★ ' : ''}${eventText(event)}`);
-    item.append(text);
-    list.append(item);
+/* ───────── 가격 변동(날짜별) ───────── */
+
+function isTaxfreeProd(prod) {
+  return Object.prototype.hasOwnProperty.call(TAXFREE_PRODUCTS, prod);
+}
+
+function filteredEvents() {
+  const { settings, state } = view;
+  const watched = new Set(settings.watched || []);
+  const myId = settings.station ? settings.station.id : null;
+  return state.events.filter((event) => {
+    if (view.changeTab === TAXFREE_TAB && !isTaxfreeProd(event.prod)) return false;
+    if (view.changeTab !== TAXFREE_TAB && view.changeTab !== ALL_TAB && event.prod !== view.changeTab) return false;
+    if (view.scope === 'watched' && !watched.has(event.id) && event.id !== myId) return false;
+    return true;
+  });
+}
+
+function renderChanges(now) {
+  for (const button of $('scopeSeg').children) button.classList.toggle('on', button.dataset.scope === view.scope);
+  const days = groupEventsByDay(filteredEvents());
+  view.activeDay = days.length ? days[0].date : null;
+  renderDayChart(days, now);
+  renderFeed(days, now);
+
+  const totals = $('changeTotals');
+  totals.replaceChildren();
+  if (days.length) {
+    const up = days.reduce((sum, day) => sum + day.up, 0);
+    const down = days.reduce((sum, day) => sum + day.down, 0);
+    totals.append(`${days.length}일 · `, el('span', 'up', `▲${up}`), ' ', el('span', 'down', `▼${down}`));
   }
 }
+
+function renderDayChart(days, now) {
+  const cols = $('dayCols');
+  cols.replaceChildren();
+  const byDate = new Map(days.map((day) => [day.date, day]));
+  const oldest = days.length ? days[days.length - 1].date : null;
+  const range = dayRange(oldest, now);
+  $('chartSpan').textContent = `최근 ${range.length}일`;
+  const peak = Math.max(1, ...range.map((date) => {
+    const day = byDate.get(date);
+    return day ? Math.max(day.up, day.down) : 0;
+  }));
+  const barHeight = (count) => (count ? Math.max(3, Math.round((count / peak) * 20)) : 0);
+
+  for (const date of range) {
+    const day = byDate.get(date);
+    const label = dayLabel(date, now);
+    const button = el('button', 'dcol');
+    button.type = 'button';
+    button.dataset.date = date;
+    if (label.relative === '오늘') button.classList.add('today');
+    if (label.weekend) button.classList.add(label.weekend);
+    const bars = el('div', 'bars');
+    if (day) {
+      if (day.up) {
+        const bar = el('div', 'bar up');
+        bar.style.height = `${barHeight(day.up)}px`;
+        bars.append(bar);
+      }
+      if (day.down) {
+        const bar = el('div', 'bar down');
+        bar.style.height = `${barHeight(day.down)}px`;
+        bars.append(bar);
+      }
+      button.title = `${label.text}${label.relative ? ` ${label.relative}` : ''} · ${day.stations}곳 · 인상 ${day.up} · 인하 ${day.down}`;
+      button.addEventListener('click', () => scrollToDay(date));
+    } else {
+      button.disabled = true;
+      button.title = `${label.text} · 변동 없음`;
+    }
+    const number = label.relative === '오늘' ? '오늘' : label.day === 1 ? `${label.month}/1` : String(label.day);
+    button.append(bars, el('span', 'dnum', number), el('span', 'dwk', label.weekday));
+    cols.append(button);
+  }
+  markActiveDay();
+}
+
+function markActiveDay() {
+  for (const button of $('dayCols').children) {
+    const on = button.dataset.date === view.activeDay;
+    button.classList.toggle('on', on);
+    button.setAttribute('aria-current', on ? 'date' : 'false');
+  }
+}
+
+function entryOrder(entry, myId, watched) {
+  if (entry.id === myId) return 0;
+  return watched.has(entry.id) ? 1 : 2;
+}
+
+function renderFeed(days, now) {
+  const { settings, state } = view;
+  const feed = $('feed');
+  const wrap = $('feedWrap');
+  feed.replaceChildren();
+  wrap.scrollTop = 0;
+  const watched = new Set(settings.watched || []);
+  const myId = settings.station ? settings.station.id : null;
+  const showProd = view.changeTab === ALL_TAB || view.changeTab === TAXFREE_TAB;
+
+  const empty = $('feedEmpty');
+  empty.hidden = days.length > 0;
+  if (!state.events.length) {
+    empty.textContent = '아직 가격 변동이 없습니다. 주변 주유소가 가격을 바꾸면 여기에 날짜별로 쌓입니다.';
+  } else if (view.scope === 'watched') {
+    empty.textContent = '감시 중인 주유소의 가격 변동이 없습니다.';
+  } else {
+    empty.textContent = '이 제품의 가격 변동이 없습니다.';
+  }
+  if (!days.length) return;
+
+  for (const day of days) {
+    const label = dayLabel(day.date, now);
+    const section = el('section', 'day');
+    section.dataset.date = day.date;
+
+    const head = el('div', 'day-head');
+    head.append(el('span', 'date', label.text));
+    if (label.relative) head.append(el('span', 'rel', label.relative));
+    const sum = el('span', 'sum', `${day.stations}곳`);
+    if (day.up) sum.append(el('b', 'up', `▲${day.up}`));
+    if (day.down) sum.append(el('b', 'down', `▼${day.down}`));
+    head.append(sum);
+    section.append(head);
+
+    for (const slot of day.slots) {
+      const block = el('div', 'slot');
+      block.append(el('div', 'slot-time', kstClock(slot.at)));
+      const list = el('ul', 'entries');
+      const entries = [...slot.entries].sort((a, b) =>
+        entryOrder(a, myId, watched) - entryOrder(b, myId, watched)
+        || ((state.stations[a.id] || {}).dist ?? Infinity) - ((state.stations[b.id] || {}).dist ?? Infinity));
+      for (const entry of entries) list.append(feedEntry(entry, { myId, watched, showProd }));
+      block.append(list);
+      section.append(block);
+    }
+    feed.append(section);
+  }
+  feed.append(el('p', 'feed-note muted', `변동 기록은 최근 ${MAX_EVENTS}건까지 남습니다.`));
+}
+
+function feedEntry(entry, { myId, watched, showProd }) {
+  const station = view.state.stations[entry.id] || {};
+  const mine = entry.id === myId;
+  const isNew = entry.changes.some((change) => view.newKeys.has(change.key));
+  const item = el('li', `entry${mine ? ' mine' : ''}`);
+  item.title = '가격표에서 보기';
+
+  const who = el('div', 'who');
+  const name = el('div', 'nm');
+  if (watched.has(entry.id)) name.append(el('span', 'star-mark', '★'));
+  name.append(el('span', 'label', station.name || entry.name || entry.id));
+  if (mine) name.append(el('span', 'tag me', '내 주유소'));
+  if (isNew) name.append(el('span', 'tag new', '새'));
+  const meta = [BRANDS[station.brand] || station.brand, formatDistance(station.dist)].filter(Boolean).join(' · ');
+  who.append(name, el('div', 'meta', meta || ' '));
+
+  const moves = el('div', 'moves');
+  for (const change of entry.changes) {
+    const move = el('div', 'move');
+    if (showProd) move.append(el('span', 'prod', PRODUCT_NAMES[change.prod] || change.prod));
+    const direction = change.delta > 0 ? 'up' : 'down';
+    move.append(
+      el('span', 'from', won(change.from)),
+      el('span', 'arrow', '→'),
+      el('span', 'to', won(change.to)),
+      el('span', `pill ${direction}`, `${change.delta > 0 ? '▲' : '▼'}${won(Math.abs(change.delta))}`)
+    );
+    moves.append(move);
+  }
+
+  item.append(who, moves);
+  item.addEventListener('click', () => jumpToStation(entry.id, entry.changes[0].prod));
+  return item;
+}
+
+// 변동 목록에서 주유소를 누르면 가격표의 그 제품 탭으로 가서 기록을 펼친다.
+function jumpToStation(id, prod) {
+  const { settings } = view;
+  if (view.changeTab !== ALL_TAB && view.changeTab !== TAXFREE_TAB) prod = view.changeTab;
+  if (isTaxfreeProd(prod)) {
+    if (!hasTaxfree() || !settings.taxfreeProducts.includes(prod)) return;
+    view.tab = TAXFREE_TAB;
+    view.taxfreeProd = prod;
+  } else if (settings.products.includes(prod)) {
+    view.tab = prod;
+  } else {
+    return;
+  }
+  view.mode = 'prices';
+  view.filter = 'all';
+  view.openRow = id;
+  view.jumpTo = id;
+  savePrefs();
+  render();
+}
+
+let programmaticScroll = false;
+
+function scrollToDay(date) {
+  const wrap = $('feedWrap');
+  const section = $('feed').querySelector(`section.day[data-date="${date}"]`);
+  if (!section) return;
+  const target = Math.min(section.offsetTop, wrap.scrollHeight - wrap.clientHeight);
+  view.activeDay = date;
+  markActiveDay();
+  if (Math.abs(target - wrap.scrollTop) < 1) return;
+  programmaticScroll = true;
+  wrap.scrollTo({ top: target, behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
+}
+
+// 목록을 굴리면 맨 위에 걸린 날짜를 막대 차트에 표시한다.
+$('feedWrap').addEventListener('scroll', () => {
+  if (programmaticScroll) return;
+  const wrap = $('feedWrap');
+  const top = wrap.scrollTop + 4;
+  let current = null;
+  for (const section of $('feed').querySelectorAll('section.day')) {
+    if (current && section.offsetTop > top) break;
+    current = section.dataset.date;
+  }
+  if (current && current !== view.activeDay) {
+    view.activeDay = current;
+    markActiveDay();
+  }
+}, { passive: true });
+
+$('feedWrap').addEventListener('scrollend', () => { programmaticScroll = false; });
+
+/* ───────── 버튼 ───────── */
 
 $('refresh').addEventListener('click', async () => {
   const button = $('refresh');
@@ -318,6 +635,15 @@ $('pauseToggle').addEventListener('click', async () => {
   }
 });
 
+$('viewSwitch').addEventListener('click', (event) => {
+  const button = event.target.closest('button[data-view]');
+  if (!button || button.dataset.view === view.mode) return;
+  view.mode = button.dataset.view;
+  view.openRow = null;
+  savePrefs();
+  render();
+});
+
 $('sortSeg').addEventListener('click', (event) => {
   const mode = event.target.dataset.sort;
   if (!mode) return;
@@ -332,10 +658,29 @@ $('filterSeg').addEventListener('click', (event) => {
   render();
 });
 
+$('scopeSeg').addEventListener('click', (event) => {
+  const scope = event.target.dataset.scope;
+  if (!scope || scope === view.scope) return;
+  view.scope = scope;
+  savePrefs();
+  render();
+});
+
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'local') void load();
 });
 
+// 팝업을 열 때 아직 안 본 감시 주유소 변동을 기억해 두고 "새"로 표시한다. 새 변동이 있으면 변동 보기로 연다.
+const prefs = readPrefs();
+view.mode = prefs.mode === 'changes' ? 'changes' : 'prices';
+view.scope = prefs.scope === 'watched' ? 'watched' : 'all';
+const opened = await chrome.storage.local.get(['settings', 'state']);
+const unseen = (opened.state && opened.state.unseen) || 0;
+if (unseen > 0) {
+  const watchedIds = new Set((opened.settings && opened.settings.watched) || []);
+  const fresh = ((opened.state && opened.state.events) || []).filter((event) => watchedIds.has(event.id)).slice(0, unseen);
+  view.newKeys = new Set(fresh.map(eventKey));
+  view.mode = 'changes';
+}
 await load();
-$('eventsBox').open = view.state.unseen > 0;
 void send({ type: 'seen' });

@@ -22,34 +22,59 @@
 
   <p id="notice" class="notice" hidden></p>
 
+  <div id="viewSwitch" class="view-switch" role="tablist" aria-label="보기">
+    <button type="button" role="tab" data-view="prices">가격표</button>
+    <button type="button" role="tab" data-view="changes">가격 변동 <span id="changeBadge" class="count" hidden></span></button>
+  </div>
+
   <nav id="tabs" class="tabs" role="tablist"></nav>
   <div id="subTabs" class="seg" hidden></div>
 
-  <section id="summary" class="summary"></section>
+  <div id="pricesView">
+    <section id="summary" class="summary"></section>
 
-  <div class="controls">
-    <div class="seg" id="sortSeg">
-      <button type="button" data-sort="price" class="on">가격순</button>
-      <button type="button" data-sort="dist">거리순</button>
+    <div class="controls">
+      <div class="seg" id="sortSeg">
+        <button type="button" data-sort="price" class="on">가격순</button>
+        <button type="button" data-sort="dist">거리순</button>
+      </div>
+      <div class="seg" id="filterSeg">
+        <button type="button" data-filter="all" class="on">전체</button>
+        <button type="button" data-filter="watched">감시만</button>
+        <button type="button" data-filter="top" id="filterTop">최저 20</button>
+      </div>
     </div>
-    <div class="seg" id="filterSeg">
-      <button type="button" data-filter="all" class="on">전체</button>
-      <button type="button" data-filter="watched">감시만</button>
-      <button type="button" data-filter="top" id="filterTop">최저 20</button>
+
+    <div class="list-wrap">
+      <table class="list">
+        <tbody id="rows"></tbody>
+      </table>
+      <p id="empty" class="muted empty" hidden>아직 받은 가격이 없습니다.</p>
     </div>
   </div>
 
-  <div class="list-wrap">
-    <table class="list">
-      <tbody id="rows"></tbody>
-    </table>
-    <p id="empty" class="muted empty" hidden>아직 받은 가격이 없습니다.</p>
-  </div>
+  <div id="changesView" hidden>
+    <section class="day-chart" aria-label="날짜별 변동 수">
+      <div class="chart-head">
+        <span><b>날짜별 변동</b> <span id="chartSpan" class="muted"></span></span>
+        <span class="legend muted"><i class="up-key"></i>인상<i class="down-key"></i>인하</span>
+      </div>
+      <div id="dayCols" class="day-cols"></div>
+    </section>
 
-  <details class="events" id="eventsBox">
-    <summary>최근 가격 변동 <span id="eventCount" class="muted"></span></summary>
-    <ul id="events"></ul>
-  </details>
+    <div class="controls">
+      <div class="seg" id="scopeSeg">
+        <button type="button" data-scope="all">전체</button>
+        <button type="button" data-scope="watched">감시만</button>
+      </div>
+      <span id="changeTotals" class="totals"></span>
+    </div>
+
+    <div id="feedWrap" class="feed-wrap">
+      <div id="feed"></div>
+      <p id="feedEmpty" class="muted empty" hidden></p>
+    </div>
+  </div>
 
   <footer class="foot muted">
     <span id="calls"></span>

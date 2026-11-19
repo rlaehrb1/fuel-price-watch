@@ -74,6 +74,100 @@ export function formatKst(ms) {
   return `${Number(iso.slice(5, 7))}/${Number(iso.slice(8, 10))} ${iso.slice(11, 16)}`;
 }
 
+export function kstClock(ms) {
+  return new Date(ms + KST_OFFSET_MS).toISOString().slice(11, 16);
+}
+
+const WEEKDAYS = ['일', '월', '화', '수', '목', '금', '토'];
+
+function shiftDate(date, days) {
+  const [y, m, d] = date.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
+}
+
+function relativeDay(date, now) {
+  if (date === kstDate(now)) return '오늘';
+  if (date === kstDate(now - DAY_MS)) return '어제';
+  return '';
+}
+
+// 'YYYY-MM-DD'(한국 날짜)의 이름표. now 기준으로 오늘·어제를 붙인다.
+export function dayLabel(date, now) {
+  const [y, m, d] = date.split('-').map(Number);
+  const weekdayIndex = new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+  const weekday = WEEKDAYS[weekdayIndex];
+  return {
+    date,
+    month: m,
+    day: d,
+    weekday,
+    weekend: weekdayIndex === 0 ? 'sun' : weekdayIndex === 6 ? 'sat' : '',
+    relative: relativeDay(date, now),
+    text: `${m}월 ${d}일 (${weekday})`
+  };
+}
+
+// 짧은 시각: 오늘 09:10, 어제 19:10, 11/17 09:10
+export function formatWhen(ms, now) {
+  const date = kstDate(ms);
+  const prefix = relativeDay(date, now) || `${Number(date.slice(5, 7))}/${Number(date.slice(8, 10))}`;
+  return `${prefix} ${kstClock(ms)}`;
+}
+
+// 오늘에서 끝나는 날짜 칸. 가장 오래된 변동 날짜까지 늘리되 min~max일 사이로 둔다. 오래된 날이 앞이다.
+export function dayRange(oldest, now, { min = 7, max = 14 } = {}) {
+  const today = kstDate(now);
+  let span = min;
+  if (oldest && oldest < today) {
+    const between = Math.round((Date.parse(today) - Date.parse(oldest)) / DAY_MS) + 1;
+    span = Math.min(max, Math.max(min, between));
+  }
+  return Array.from({ length: span }, (_, index) => shiftDate(today, index - span + 1));
+}
+
+export function eventKey(event) {
+  return `${event.at}|${event.id}|${event.prod}`;
+}
+
+// 최신순 변동 기록을 날짜 → 확인 시각 → 주유소로 묶는다.
+// 한 번 확인할 때 한 주유소가 여러 제품을 바꿨으면 한 항목에 모은다.
+export function groupEventsByDay(events) {
+  const days = [];
+  for (const event of events) {
+    const date = kstDate(event.at);
+    let day = days[days.length - 1];
+    if (!day || day.date !== date) {
+      day = { date, slots: [], up: 0, down: 0, stations: 0, ids: new Set() };
+      days.push(day);
+    }
+    let slot = day.slots[day.slots.length - 1];
+    if (!slot || slot.at !== event.at) {
+      slot = { at: event.at, entries: [] };
+      day.slots.push(slot);
+    }
+    let entry = slot.entries.find((item) => item.id === event.id);
+    if (!entry) {
+      entry = { id: event.id, name: event.name, changes: [] };
+      slot.entries.push(entry);
+    }
+    const delta = event.to - event.from;
+    entry.changes.push({ prod: event.prod, from: event.from, to: event.to, delta, key: eventKey(event) });
+    if (delta > 0) day.up += 1;
+    else if (delta < 0) day.down += 1;
+    day.ids.add(event.id);
+  }
+  const order = Object.keys(PRODUCT_NAMES);
+  const rank = (prod) => (order.includes(prod) ? order.indexOf(prod) : order.length);
+  for (const day of days) {
+    day.stations = day.ids.size;
+    delete day.ids;
+    for (const slot of day.slots) {
+      for (const entry of slot.entries) entry.changes.sort((a, b) => rank(a.prod) - rank(b.prod));
+    }
+  }
+  return days;
+}
+
 // now 이전에 지나간 가장 최근 확인 시각.
 export function latestSlotAt(now) {
   const shifted = now + KST_OFFSET_MS;

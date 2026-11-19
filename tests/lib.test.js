@@ -6,10 +6,14 @@ import {
   bumpCalls,
   callsPerCheck,
   callsToday,
+  dayLabel,
+  dayRange,
   defaultWatched,
   emptyState,
   eventText,
   formatKst,
+  formatWhen,
+  groupEventsByDay,
   latestSlotAt,
   mergeSnapshot,
   parseAverages,
@@ -175,4 +179,49 @@ test('호출 수는 조사 중심과 제품 수로 정해진다', () => {
   assert.equal(callsPerCheck(base), 12);
   assert.equal(callsPerCheck({ ...base, extraCenters: [{ id: 'X' }] }), 16);
   assert.equal(callsPerCheck({ ...base, city: null, taxfreeArea: null }), 4);
+});
+
+test('변동 기록은 날짜, 확인 시각, 주유소 순으로 묶는다', () => {
+  const at1 = kst('2026-11-19T09:10:00');
+  const at2 = kst('2026-11-19T01:10:00');
+  const at3 = kst('2026-11-18T19:10:00');
+  const events = [
+    { at: at1, id: 'A2', name: '가', prod: 'D047', from: 1650, to: 1640 },
+    { at: at1, id: 'A3', name: '나', prod: 'B027', from: 1779, to: 1799 },
+    { at: at1, id: 'A2', name: '가', prod: 'B027', from: 1797, to: 1787 },
+    { at: at2, id: 'A3', name: '나', prod: 'B027', from: 1789, to: 1779 },
+    { at: at3, id: 'A4', name: '다', prod: 'B027', from: 1800, to: 1810 }
+  ];
+  const days = groupEventsByDay(events);
+  assert.deepEqual(days.map((day) => day.date), ['2026-11-19', '2026-11-18']);
+  const [today, yesterday] = days;
+  assert.equal(today.slots.length, 2);
+  assert.deepEqual(today.slots[0].entries.map((entry) => entry.id), ['A2', 'A3']);
+  assert.deepEqual(today.slots[0].entries[0].changes.map((change) => [change.prod, change.delta]), [['B027', -10], ['D047', -10]]);
+  assert.deepEqual([today.up, today.down, today.stations], [1, 3, 2]);
+  assert.deepEqual([yesterday.up, yesterday.down, yesterday.stations], [1, 0, 1]);
+});
+
+test('날짜 이름표와 짧은 시각은 오늘·어제를 붙인다', () => {
+  const now = kst('2026-11-19T10:00:00');
+  assert.equal(dayLabel('2026-11-19', now).relative, '오늘');
+  assert.equal(dayLabel('2026-11-18', now).relative, '어제');
+  assert.equal(dayLabel('2026-11-15', now).text, '11월 15일 (일)');
+  assert.equal(dayLabel('2026-11-15', now).weekend, 'sun');
+  assert.equal(formatWhen(kst('2026-11-19T09:10:00'), now), '오늘 09:10');
+  assert.equal(formatWhen(kst('2026-11-18T23:50:00'), now), '어제 23:50');
+  assert.equal(formatWhen(kst('2026-11-17T19:10:00'), now), '11/17 19:10');
+});
+
+test('날짜 칸은 오늘에서 끝나고 7~14일 사이다', () => {
+  const now = kst('2026-11-19T10:00:00');
+  const short = dayRange(null, now);
+  assert.equal(short.length, 7);
+  assert.equal(short[0], '2026-11-13');
+  assert.equal(short[6], '2026-11-19');
+  assert.equal(dayRange('2026-11-10', now).length, 10);
+  const long = dayRange('2026-10-01', now);
+  assert.equal(long.length, 14);
+  assert.equal(long[0], '2026-11-06');
+  assert.equal(dayRange('2026-11-01', kst('2026-11-03T01:00:00'))[0], '2026-10-28');
 });

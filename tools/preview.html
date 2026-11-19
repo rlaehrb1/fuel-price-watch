@@ -10,7 +10,57 @@
   // 사용: 이 폴더를 웹 서버로 열고 tools/preview.html?page=popup 또는 ?page=options
   const page = new URLSearchParams(location.search).get('page') === 'options' ? 'options' : 'popup';
   const store = await (await fetch('/tools/sample.json')).json();
+  // ?demo=history: 표본 주유소로 최근 열흘치 가짜 변동 기록을 만든다(같은 결과가 나오도록 고정 난수).
+  if (new URLSearchParams(location.search).get('demo') === 'history') makeDemoHistory(store);
   const listeners = [];
+
+  function makeDemoHistory(store) {
+    const { state, settings } = store;
+    const HOUR = 3600e3;
+    const DAY = 24 * HOUR;
+    const KST = 9 * HOUR;
+    const now = Date.now();
+    const todayStart = Math.floor((now + KST) / DAY) * DAY - KST;
+    let seed = 20261119;
+    const rand = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+    const pick = (list) => list[Math.floor(rand() * list.length)];
+    const slots = [];
+    for (let day = 0; day < 10; day += 1) {
+      for (const hour of [19, 16, 12, 9, 2, 1]) {
+        const at = todayStart - day * DAY + hour * HOUR + 10 * 60e3;
+        if (at <= now) slots.push(at);
+      }
+    }
+    const current = structuredClone(state.prices);
+    const regular = settings.products.filter((prod) => current[prod]);
+    const watched = [...(settings.watched || []), settings.station.id];
+    const events = [];
+    for (const at of slots) {
+      if (rand() < 0.5) continue;
+      const count = 1 + Math.floor(rand() * 4);
+      for (let index = 0; index < count; index += 1) {
+        const prod = rand() < 0.75 ? pick(regular.slice(0, 2)) : pick(Object.keys(current));
+        const ids = Object.keys(current[prod]);
+        const id = rand() < 0.5 ? pick(watched.filter((item) => item in current[prod])) || pick(ids) : pick(ids);
+        const delta = (rand() < 0.45 ? 1 : -1) * pick([5, 10, 10, 10, 15, 20, 30]);
+        const prods = [prod];
+        if (regular.includes(prod) && rand() < 0.35) prods.push(regular.find((item) => item !== prod && id in current[item]));
+        for (const item of prods.filter(Boolean)) {
+          const to = current[item][id];
+          if (to === undefined || events.some((event) => event.at === at && event.id === id && event.prod === item)) continue;
+          current[item][id] = to - delta;
+          events.push({ at, id, name: state.stations[id].name, prod: item, from: to - delta, to });
+        }
+      }
+    }
+    state.events = events;
+    state.changes = {};
+    for (const event of [...events].reverse()) {
+      state.changes[event.prod] = { ...(state.changes[event.prod] || {}), [event.id]: { from: event.from, at: event.at } };
+    }
+    state.fetchedAt = slots[0];
+    state.unseen = Math.min(3, events.filter((event) => watched.includes(event.id)).length);
+  }
   window.chrome = {
     storage: {
       local: {
