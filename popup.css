@@ -10,6 +10,11 @@
   --down: #1967d2;
   --up-soft: #fce8e6;
   --down-soft: #e8f0fe;
+  /* 추이 그래프 계열 색(검증된 기본 팔레트 1~3번) */
+  --s-mine: #2a78d6;
+  --s-rival: #eb6834;
+  --s-avg: #1baf7a;
+  --grid: #eceef1;
   --mine: #fff6df;
   --star: #e8a400;
   --stop: #c5221f;
@@ -32,6 +37,10 @@
     --down: #8ab4f8;
   --up-soft: #3c2422;
   --down-soft: #1f2c40;
+    --s-mine: #3987e5;
+    --s-rival: #d95926;
+    --s-avg: #199e70;
+    --grid: #2a2e35;
     --mine: #3a3220;
     --star: #f5c04a;
     --stop: #f28b82;
@@ -183,7 +192,7 @@ body.page { width: auto; max-width: 640px; margin: 0 auto; padding: 24px 16px 48
 /* 보기 전환 */
 .view-switch {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr 1fr 1fr;
   gap: 3px;
   margin: 2px 14px 6px;
   padding: 3px;
@@ -337,3 +346,75 @@ body.page { width: auto; max-width: 640px; margin: 0 auto; padding: 24px 16px 48
 .page .results li div { flex: 1; min-width: 0; }
 .page .current { margin: 0 0 8px; }
 .page .save-row { margin-top: 24px; display: flex; gap: 12px; align-items: center; }
+
+.btn.mini { padding: 3px 9px; font-size: 12px; border-radius: 7px; }
+.controls .right { display: inline-flex; align-items: center; gap: 8px; }
+
+/* 날짜별 추이 */
+.trend-legend { display: flex; gap: 14px; padding: 2px 14px 0; font-size: 11px; color: var(--muted); }
+.trend-legend .key { display: inline-block; width: 14px; height: 0; border-top: 2px solid; margin-right: 5px; vertical-align: 3px; }
+.trend-legend .key.mine { border-color: var(--s-mine); }
+.trend-legend .key.rival { border-color: var(--s-rival); }
+.trend-legend .key.avg { border-color: var(--s-avg); border-top-style: dashed; }
+
+.trend-chart { position: relative; padding: 4px 14px 0; }
+.trend-chart svg { display: block; width: 100%; height: 168px; overflow: visible; touch-action: none; }
+.trend-chart .gridline { stroke: var(--grid); stroke-width: 1; }
+.trend-chart .axis { fill: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+.trend-chart .series { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.trend-chart .series.mine { stroke: var(--s-mine); }
+.trend-chart .series.rival { stroke: var(--s-rival); }
+.trend-chart .series.avg { stroke: var(--s-avg); stroke-dasharray: 5 3; }
+.trend-chart .end-dot { stroke: var(--bg); stroke-width: 2; }
+.trend-chart .end-dot.mine, .trend-chart .hover-dot.mine { fill: var(--s-mine); }
+.trend-chart .end-dot.rival, .trend-chart .hover-dot.rival { fill: var(--s-rival); }
+.trend-chart .end-dot.avg, .trend-chart .hover-dot.avg { fill: var(--s-avg); }
+.trend-chart .hover-dot { stroke: var(--bg); stroke-width: 2; }
+.trend-chart .end-label { fill: var(--text); font-size: 10px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.trend-chart .leader { stroke: var(--muted); stroke-width: 1; }
+.trend-chart .crosshair { stroke: var(--muted); stroke-width: 1; }
+.trend-chart .nodata { fill: var(--muted); font-size: 12px; }
+
+.trend-tip {
+  position: absolute;
+  top: 6px;
+  min-width: 150px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .12);
+  font-size: 11px;
+  pointer-events: none;
+}
+.trend-tip .tip-date { font-weight: 700; margin-bottom: 2px; }
+.trend-tip .tip-row { display: flex; align-items: center; gap: 6px; }
+.trend-tip .tip-row b { margin-left: auto; font-variant-numeric: tabular-nums; }
+.trend-tip .tip-sub { color: var(--muted); margin-left: 14px; }
+.trend-tip i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; }
+.trend-tip i.mine { background: var(--s-mine); }
+.trend-tip i.rival { background: var(--s-rival); }
+.trend-tip i.avg { background: var(--s-avg); }
+
+.trend-summary { margin: 2px 14px 6px; font-size: 12px; color: var(--muted); line-height: 1.5; }
+.trend-summary b { color: var(--text); }
+
+.trend-table-wrap { max-height: 150px; overflow-y: auto; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.trend-table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+.trend-table th {
+  position: sticky;
+  top: 0;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  text-align: right;
+  padding: 4px 8px;
+}
+.trend-table th:first-child, .trend-table td:first-child { text-align: left; padding-left: 14px; }
+.trend-table th:last-child, .trend-table td:last-child { padding-right: 14px; }
+.trend-table td { text-align: right; padding: 4px 8px; border-bottom: 1px solid var(--line); }
+.trend-table tr:last-child td { border-bottom: 0; }
+.trend-table tr.on td { background: var(--accent-soft); }
+.trend-table td.sun { color: var(--up); }
+.trend-table .gap-up { font-weight: 700; }

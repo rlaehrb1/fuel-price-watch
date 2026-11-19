@@ -31,7 +31,11 @@ export const UPDATE_HOURS = [1, 2, 9, 12, 16, 19];
 export const SLOT_DELAY_MS = 10 * 60 * 1000;
 export const DAILY_LIMIT = 300;
 export const SAFE_LIMIT = 280;
-export const MAX_EVENTS = 300;
+// 변동 기록은 90일 동안 남긴다. 저장 공간을 지키려고 개수에도 넉넉한 상한을 둔다.
+export const EVENT_KEEP_DAYS = 90;
+export const MAX_EVENTS = 5000;
+// 날짜별 추이(내 가격·감시 주유소 가격·시 평균)는 1년 남긴다.
+export const HISTORY_KEEP_DAYS = 400;
 export const DEFAULT_WATCH_RADIUS = 1500;
 
 const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
@@ -292,7 +296,7 @@ export function mergeSnapshot(prev, fetched, now) {
     state.changes[prod] = changes;
     if (top.length) state.top[prod] = top.map((station) => station.id);
   }
-  state.events = [...events, ...base.events].slice(0, MAX_EVENTS);
+  state.events = pruneEvents([...events, ...base.events], now);
   state.fetchedAt = now;
   state.lastError = null;
   return { state, events };
@@ -388,4 +392,169 @@ export function won(value) {
 export function formatDistance(meters) {
   if (meters === null || meters === undefined) return '';
   return meters < 1000 ? `${meters}m` : `${(meters / 1000).toFixed(1)}km`;
+}
+
+// ───────── 변동 기록 보관 ─────────
+
+// 오늘을 포함해 EVENT_KEEP_DAYS일 안의 변동만 남긴다. 하루 단위로 자르므로 남은 날은 그날 기록이 온전하다.
+export function pruneEvents(events, now) {
+  const cutoff = shiftDate(kstDate(now), -(EVENT_KEEP_DAYS - 1));
+  return events.filter((event) => kstDate(event.at) >= cutoff).slice(0, MAX_EVENTS);
+}
+
+// ───────── CSV ─────────
+
+export function toCsv(rows) {
+  const cell = (value) => {
+    const text = value === null || value === undefined ? '' : String(value);
+    return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+  };
+  return rows.map((row) => row.map(cell).join(',')).join('\r\n');
+}
+
+export function eventsCsvRows(events, { stations = {}, watched = [], myId = null } = {}) {
+  const watchedSet = new Set(watched || []);
+  const rows = [['날짜', '시각', '주유소', '상표', '거리(m)', '제품', '이전 가격', '바뀐 가격', '차이', '구분']];
+  for (const event of events) {
+    const station = stations[event.id] || {};
+    const kind = event.id === myId ? '내 주유소' : watchedSet.has(event.id) ? '감시' : '';
+    rows.push([
+      kstDate(event.at), kstClock(event.at), station.name || event.name || event.id,
+      BRANDS[station.brand] || station.brand || '', station.dist ?? '',
+      PRODUCT_NAMES[event.prod] || event.prod, event.from, event.to, event.to - event.from, kind
+    ]);
+  }
+  return rows;
+}
+
+// ───────── 날짜별 추이 ─────────
+// history = {
+//   days: { 'YYYY-MM-DD': { 제품: { p: {주유소: 가격}, avg, min } } }  그날 마지막 확인 때의 내 주유소·감시 주유소 가격
+//   area: { 'YYYY-MM-DD': { 제품: 평균가격 } }                          오피넷이 확정한 시·군 일일 평균
+//   areaCode, areaUpdatedOn, areaBackfillDone, areaTriedAt
+// }
+
+export function emptyHistory() {
+  return { days: {}, area: {}, areaCode: null, areaUpdatedOn: null, areaBackfillDone: false, areaTriedAt: 0 };
+}
+
+function pruneDates(map, keepFrom) {
+  return Object.fromEntries(Object.entries(map || {}).filter(([date]) => date >= keepFrom));
+}
+
+// 확인할 때마다 오늘 칸을 덮어쓴다. 하루가 지나면 그날 마지막 값이 남는다.
+export function recordDay(history, state, settings, now) {
+  const base = { ...emptyHistory(), ...(history || {}) };
+  const today = kstDate(now);
+  const myId = settings.station ? settings.station.id : null;
+  const ids = [myId, ...(settings.watched || [])].filter(Boolean);
+  const day = { ...(base.days[today] || {}) };
+  for (const prod of settings.products || []) {
+    const prices = state.prices[prod];
+    if (!prices || !Object.keys(prices).length) continue;
+    const p = {};
+    for (const id of ids) if (prices[id] !== undefined) p[id] = prices[id];
+    day[prod] = {
+      p,
+      avg: state.average[prod] ? state.average[prod].price : null,
+      min: Math.min(...Object.values(prices))
+    };
+  }
+  const keepFrom = shiftDate(today, -(HISTORY_KEEP_DAYS - 1));
+  return {
+    ...base,
+    days: pruneDates({ ...base.days, [today]: day }, keepFrom),
+    area: pruneDates(base.area, keepFrom)
+  };
+}
+
+function isoDate(text) {
+  const digits = String(text || '').replace(/\D/g, '');
+  return digits.length === 8 ? `${digits.slice(0, 4)}-${digits.slice(4, 6)}-${digits.slice(6, 8)}` : null;
+}
+
+// areaAvgRecentPrice.do / dateAreaAvgRecentPrice.do 응답 → { 날짜: { 제품: 평균 } }
+export function parseAreaDaily(json) {
+  const list = json && json.RESULT && json.RESULT.OIL;
+  const result = {};
+  if (!Array.isArray(list)) return result;
+  for (const raw of list) {
+    const date = isoDate(raw.DATE);
+    const price = Number(raw.PRICE);
+    if (!date || !PRODUCTS[raw.PRODCD] || !Number.isFinite(price) || price <= 0) continue;
+    result[date] = { ...(result[date] || {}), [raw.PRODCD]: price };
+  }
+  return result;
+}
+
+// 시·군이 바뀌면 이전 평균은 버린다.
+export function mergeArea(history, daily, areaCode) {
+  const base = { ...emptyHistory(), ...(history || {}) };
+  const area = base.areaCode === areaCode ? { ...base.area } : {};
+  for (const [date, prices] of Object.entries(daily)) area[date] = { ...(area[date] || {}), ...prices };
+  const reset = base.areaCode !== areaCode;
+  return { ...base, area, areaCode, areaBackfillDone: reset ? false : base.areaBackfillDone };
+}
+
+// 과거 평균을 채울 때 다음에 물어볼 날짜(YYYYMMDD). 이미 다 채웠으면 null.
+export function areaBackfillDate(history, now, days = EVENT_KEEP_DAYS) {
+  if (!history || history.areaBackfillDone) return null;
+  const dates = Object.keys(history.area || {}).sort();
+  if (!dates.length) return shiftDate(kstDate(now), -1).replace(/-/g, '');
+  const target = shiftDate(kstDate(now), -days);
+  if (dates[0] <= target) return null;
+  return shiftDate(dates[0], -1).replace(/-/g, '');
+}
+
+// 한 제품의 날짜별 값. dates는 오래된 날부터.
+// 변동 기록이 있는 기간은 지금 가격에서 변동을 거꾸로 되돌려 그날 마지막 가격을 구하고,
+// 그보다 오래된 날은 저장해 둔 하루 기록을 쓴다.
+export function dailySeries(state, history, prod, { myId, watched = [], dates, now }) {
+  const today = kstDate(now);
+  const hist = { ...emptyHistory(), ...(history || {}) };
+  const rivals = (watched || []).filter((id) => id !== myId);
+  const oldestEvent = state.events.length ? kstDate(state.events[state.events.length - 1].at) : null;
+  const start = oldestEvent || (state.fetchedAt ? kstDate(state.fetchedAt) : null);
+  const events = state.events.filter((event) => event.prod === prod);
+  const current = { ...(state.prices[prod] || {}) };
+  let index = 0;
+  const rows = [];
+  for (const date of [...dates].sort().reverse()) {
+    if (date > today) continue;
+    while (index < events.length && kstDate(events[index].at) > date) {
+      current[events[index].id] = events[index].from;
+      index += 1;
+    }
+    const snapshot = (hist.days[date] || {})[prod] || null;
+    let prices = null;
+    if (start && date >= start && Object.keys(current).length) prices = current;
+    else if (snapshot) prices = snapshot.p;
+    let rival = null;
+    let rivalId = null;
+    if (prices) {
+      for (const id of rivals) {
+        const price = prices[id];
+        if (price !== undefined && (rival === null || price < rival)) {
+          rival = price;
+          rivalId = id;
+        }
+      }
+    }
+    const areaAvg = (hist.area[date] || {})[prod];
+    const nowAvg = date === today && state.average[prod] ? state.average[prod].price : null;
+    rows.push({
+      date,
+      mine: prices && prices[myId] !== undefined ? prices[myId] : null,
+      rival,
+      rivalId,
+      avg: areaAvg ?? nowAvg ?? (snapshot ? snapshot.avg : null)
+    });
+  }
+  return rows.reverse();
+}
+
+// 최근 n일 날짜(오래된 날부터).
+export function lastDays(now, count) {
+  const today = kstDate(now);
+  return Array.from({ length: count }, (_, index) => shiftDate(today, index - count + 1));
 }

@@ -2,39 +2,51 @@ import {
   BRANDS,
   DAILY_LIMIT,
   DEFAULT_SETTINGS,
-  MAX_EVENTS,
+  EVENT_KEEP_DAYS,
   PRODUCTS,
   PRODUCT_NAMES,
   TAXFREE_PRODUCTS,
   callsToday,
+  dailySeries,
   dayLabel,
   dayRange,
+  emptyHistory,
   emptyState,
   eventKey,
+  eventsCsvRows,
   formatDistance,
   formatKst,
   formatWhen,
   groupEventsByDay,
   kstClock,
   kstDate,
+  lastDays,
   sortRows,
   summarize,
+  toCsv,
   won
 } from './lib.js';
 
 const TAXFREE_TAB = 'taxfree';
 const ALL_TAB = 'all';
 const PREFS_KEY = 'popupPrefs';
+const RANGES = [14, 30, 90];
+const SVG_NS = 'http://www.w3.org/2000/svg';
+const SERIES = [['mine', '내 가격'], ['rival', '감시 최저가'], ['avg', '시 평균']];
 const $ = (id) => document.getElementById(id);
 
 const view = {
   settings: { ...DEFAULT_SETTINGS },
   state: emptyState(),
+  history: emptyHistory(),
   calls: null,
   paused: false,
-  mode: 'prices', // prices | changes
+  mode: 'prices', // prices | changes | trend
   tab: null,
   changeTab: ALL_TAB,
+  trendTab: null,
+  range: 30,
+  trendSeries: [],
   taxfreeProd: null,
   sort: 'price',
   filter: 'all',
@@ -57,7 +69,7 @@ function readPrefs() {
 
 function savePrefs() {
   try {
-    localStorage.setItem(PREFS_KEY, JSON.stringify({ mode: view.mode, scope: view.scope }));
+    localStorage.setItem(PREFS_KEY, JSON.stringify({ mode: view.mode, scope: view.scope, range: view.range }));
   } catch {
     // 기억하지 못해도 화면은 그대로 쓴다.
   }
@@ -79,14 +91,16 @@ function prefersReducedMotion() {
 }
 
 async function load() {
-  const stored = await chrome.storage.local.get(['settings', 'state', 'calls', 'paused']);
+  const stored = await chrome.storage.local.get(['settings', 'state', 'history', 'calls', 'paused']);
   view.settings = { ...DEFAULT_SETTINGS, ...(stored.settings || {}) };
   view.state = { ...emptyState(), ...(stored.state || {}) };
+  view.history = { ...emptyHistory(), ...(stored.history || {}) };
   view.calls = stored.calls || null;
   view.paused = stored.paused === true;
   if (!view.tab || (view.tab !== TAXFREE_TAB && !view.settings.products.includes(view.tab))) {
     view.tab = view.settings.products[0] || TAXFREE_TAB;
   }
+  if (!view.settings.products.includes(view.trendTab)) view.trendTab = view.settings.products[0] || null;
   if (view.changeTab !== ALL_TAB && !changeTabs().some(([code]) => code === view.changeTab)) {
     view.changeTab = ALL_TAB;
   }
@@ -118,6 +132,10 @@ function changeTabs() {
   return [[ALL_TAB, '전체'], ...priceTabs()];
 }
 
+function trendTabs() {
+  return view.settings.products.map((code) => [code, PRODUCTS[code]]);
+}
+
 function render() {
   const { settings, state } = view;
   const now = Date.now();
@@ -130,8 +148,10 @@ function render() {
 
   $('pricesView').hidden = view.mode !== 'prices';
   $('changesView').hidden = view.mode !== 'changes';
+  $('trendView').hidden = view.mode !== 'trend';
   if (view.mode === 'prices') renderPrices(now);
-  else renderChanges(now);
+  else if (view.mode === 'changes') renderChanges(now);
+  else renderTrend(now);
 
   $('calls').textContent = `오늘 오피넷 호출 ${callsToday(view.calls, now)} / ${DAILY_LIMIT}`;
 }
@@ -175,15 +195,17 @@ function renderSwitch(now) {
 function renderTabs() {
   const tabs = $('tabs');
   tabs.replaceChildren();
-  const changes = view.mode === 'changes';
-  const current = changes ? view.changeTab : view.tab;
-  for (const [code, label] of changes ? changeTabs() : priceTabs()) {
+  const { mode } = view;
+  const current = mode === 'changes' ? view.changeTab : mode === 'trend' ? view.trendTab : view.tab;
+  const entries = mode === 'changes' ? changeTabs() : mode === 'trend' ? trendTabs() : priceTabs();
+  for (const [code, label] of entries) {
     const button = el('button', code === current ? 'on' : '', label);
     button.type = 'button';
     button.setAttribute('role', 'tab');
     button.setAttribute('aria-selected', String(code === current));
     button.addEventListener('click', () => {
-      if (changes) view.changeTab = code;
+      if (mode === 'changes') view.changeTab = code;
+      else if (mode === 'trend') view.trendTab = code;
       else view.tab = code;
       view.openRow = null;
       render();
@@ -192,7 +214,7 @@ function renderTabs() {
   }
 
   const sub = $('subTabs');
-  sub.hidden = changes || view.tab !== TAXFREE_TAB;
+  sub.hidden = mode !== 'prices' || view.tab !== TAXFREE_TAB;
   sub.replaceChildren();
   for (const code of view.settings.taxfreeProducts) {
     const button = el('button', code === view.taxfreeProd ? 'on' : '', TAXFREE_PRODUCTS[code]);
@@ -496,7 +518,7 @@ function renderFeed(days, now) {
     }
     feed.append(section);
   }
-  feed.append(el('p', 'feed-note muted', `변동 기록은 최근 ${MAX_EVENTS}건까지 남습니다.`));
+  feed.append(el('p', 'feed-note muted', `변동 기록은 ${EVENT_KEEP_DAYS}일 동안 남습니다.`));
 }
 
 function feedEntry(entry, { myId, watched, showProd }) {
@@ -554,6 +576,293 @@ function jumpToStation(id, prod) {
   savePrefs();
   render();
 }
+
+/* ───────── 날짜별 추이 ───────── */
+
+function svgEl(tag, attrs = {}, text) {
+  const node = document.createElementNS(SVG_NS, tag);
+  for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, String(value));
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+function gapText(gap) {
+  const rounded = Math.round(gap);
+  return rounded === 0 ? '같음' : `${won(Math.abs(rounded))}원 ${rounded > 0 ? '비쌈' : '쌈'}`;
+}
+
+function signed(value) {
+  const rounded = Math.round(value);
+  return rounded === 0 ? '0' : `${rounded > 0 ? '+' : '−'}${won(Math.abs(rounded))}`;
+}
+
+function cityName() {
+  return view.settings.city ? view.settings.city.name : '시';
+}
+
+function stationName(id) {
+  return id ? ((view.state.stations[id] || {}).name || id) : '';
+}
+
+function renderTrend(now) {
+  for (const button of $('rangeSeg').children) button.classList.toggle('on', Number(button.dataset.range) === view.range);
+  const { settings, state, history } = view;
+  const myId = settings.station ? settings.station.id : null;
+  const series = view.trendTab
+    ? dailySeries(state, history, view.trendTab, { myId, watched: settings.watched, dates: lastDays(now, view.range), now })
+    : [];
+  view.trendSeries = series;
+  $('avgLegend').textContent = `${cityName()} 평균`;
+  $('avgHead').textContent = `${cityName()} 평균`;
+  drawTrendChart(series, now);
+  renderTrendSummary(series);
+  renderTrendTable(series, now);
+}
+
+// 눈금 간격: 값 범위에 눈금이 3~5개 들어가도록 고른다.
+function tickStep(span) {
+  for (const step of [5, 10, 20, 25, 50, 100, 200, 500]) if (span / step <= 4) return step;
+  return 1000;
+}
+
+function drawTrendChart(series, now) {
+  const svg = $('trendSvg');
+  svg.replaceChildren();
+  $('trendTip').hidden = true;
+  const width = svg.clientWidth || 432;
+  const height = 168;
+  svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+  const pad = { l: 38, r: 46, t: 8, b: 20 };
+  const plotW = width - pad.l - pad.r;
+  const plotH = height - pad.t - pad.b;
+  const values = series.flatMap((row) => SERIES.map(([key]) => row[key])).filter((value) => value !== null);
+  if (!values.length) {
+    svg.append(svgEl('text', { x: width / 2, y: height / 2, 'text-anchor': 'middle', class: 'nodata' }, '아직 쌓인 기록이 없습니다.'));
+    return;
+  }
+
+  const rawLo = Math.min(...values);
+  const rawHi = Math.max(...values);
+  const step = tickStep(Math.max(rawHi - rawLo, 10));
+  let lo = Math.floor(rawLo / step) * step;
+  let hi = Math.ceil(rawHi / step) * step;
+  if (rawLo - lo < step * 0.15) lo -= step;
+  if (hi - rawHi < step * 0.15) hi += step;
+  const n = series.length;
+  const x = (index) => pad.l + (n === 1 ? plotW / 2 : (index * plotW) / (n - 1));
+  const y = (value) => pad.t + ((hi - value) / (hi - lo)) * plotH;
+
+  for (let tick = lo; tick <= hi; tick += step) {
+    svg.append(
+      svgEl('line', { x1: pad.l, x2: width - pad.r, y1: y(tick), y2: y(tick), class: 'gridline' }),
+      svgEl('text', { x: pad.l - 6, y: y(tick) + 3, 'text-anchor': 'end', class: 'axis' }, won(tick))
+    );
+  }
+
+  // 날짜 눈금: 오늘부터 거꾸로 같은 간격으로 5개 안팎.
+  const every = Math.max(1, Math.ceil(n / 5));
+  for (let index = n - 1; index >= 0; index -= every) {
+    const [, m, d] = series[index].date.split('-').map(Number);
+    const anchor = index === n - 1 ? 'end' : index === 0 ? 'start' : 'middle';
+    const label = index === n - 1 ? '오늘' : `${m}/${d}`;
+    svg.append(svgEl('text', { x: x(index) + (anchor === 'end' ? 4 : 0), y: height - 4, 'text-anchor': anchor, class: 'axis' }, label));
+  }
+
+  const ends = [];
+  for (const [key] of SERIES) {
+    let path = '';
+    let pen = false;
+    series.forEach((row, index) => {
+      if (row[key] === null) {
+        pen = false;
+        return;
+      }
+      path += `${pen ? 'L' : 'M'}${x(index).toFixed(1)},${y(row[key]).toFixed(1)}`;
+      pen = true;
+    });
+    if (path) svg.append(svgEl('path', { d: path, class: `series ${key}` }));
+    const last = series[n - 1][key];
+    if (last !== null) ends.push({ key, value: last, y: y(last) });
+  }
+
+  // 끝 값 표시: 겹치면 아래로 밀고 짧은 선으로 잇는다.
+  ends.sort((a, b) => a.y - b.y);
+  let floor = pad.t;
+  for (const end of ends) {
+    end.labelY = Math.max(end.y, floor);
+    floor = end.labelY + 12;
+  }
+  const overflow = ends.length ? ends[ends.length - 1].labelY - (height - pad.b) : 0;
+  if (overflow > 0) for (const end of ends) end.labelY -= overflow;
+  const endX = x(n - 1);
+  for (const end of ends) {
+    if (Math.abs(end.labelY - end.y) > 2) {
+      svg.append(svgEl('line', { x1: endX + 5, y1: end.y, x2: endX + 9, y2: end.labelY, class: 'leader' }));
+    }
+    svg.append(
+      svgEl('circle', { cx: endX, cy: end.y, r: 4, class: `end-dot ${end.key}` }),
+      svgEl('text', { x: endX + 11, y: end.labelY + 3.5, class: 'end-label' }, won(end.value))
+    );
+  }
+
+  // 마우스를 올리면 그 날짜의 값을 보여준다.
+  const hover = svgEl('g');
+  const hit = svgEl('rect', { x: pad.l - 6, y: 0, width: plotW + 12, height, fill: 'transparent' });
+  svg.append(hover, hit);
+  const show = (event) => {
+    const box = svg.getBoundingClientRect();
+    const px = ((event.clientX - box.left) / box.width) * width;
+    const index = Math.max(0, Math.min(n - 1, Math.round(((px - pad.l) / plotW) * (n - 1))));
+    showTrendPoint(index, { hover, x, y, pad, height, now });
+  };
+  hit.addEventListener('pointermove', show);
+  hit.addEventListener('pointerdown', show);
+  hit.addEventListener('pointerleave', () => {
+    hover.replaceChildren();
+    $('trendTip').hidden = true;
+    markTrendRow(null);
+  });
+}
+
+function showTrendPoint(index, { hover, x, y, pad, height, now }) {
+  const row = view.trendSeries[index];
+  hover.replaceChildren(svgEl('line', { x1: x(index), x2: x(index), y1: pad.t, y2: height - pad.b, class: 'crosshair' }));
+  for (const [key] of SERIES) {
+    if (row[key] !== null) hover.append(svgEl('circle', { cx: x(index), cy: y(row[key]), r: 4, class: `hover-dot ${key}` }));
+  }
+
+  const tip = $('trendTip');
+  tip.replaceChildren();
+  const label = dayLabel(row.date, now);
+  tip.append(el('div', 'tip-date', `${label.text}${label.relative ? ` ${label.relative}` : ''}`));
+  for (const [key, name] of SERIES) {
+    const line = el('div', 'tip-row');
+    line.append(el('i', key), el('span', '', key === 'avg' ? `${cityName()} 평균` : name), el('b', '', row[key] === null ? '–' : won(row[key])));
+    tip.append(line);
+    if (key === 'rival' && row.rivalId) tip.append(el('div', 'tip-sub', stationName(row.rivalId)));
+  }
+  if (row.mine !== null && row.rival !== null) {
+    tip.append(el('div', 'tip-sub', `내 가격이 ${gapText(row.mine - row.rival)}`));
+  }
+  tip.hidden = false;
+  const chartWidth = $('trendChart').clientWidth;
+  const left = x(index) + 14 + 12;
+  tip.style.left = `${left + tip.offsetWidth > chartWidth - 4 ? Math.max(4, left - tip.offsetWidth - 24) : left}px`;
+  markTrendRow(row.date);
+}
+
+function markTrendRow(date) {
+  for (const tr of $('trendRows').children) tr.classList.toggle('on', tr.dataset.date === date);
+}
+
+function renderTrendSummary(series) {
+  const box = $('trendSummary');
+  box.replaceChildren();
+  const withMine = series.filter((row) => row.mine !== null);
+  if (!withMine.length) {
+    box.textContent = '내 가격 기록이 아직 없습니다. 확인할 때마다 날짜별로 쌓입니다.';
+    return;
+  }
+  const lines = [];
+  const first = withMine[0];
+  const last = withMine[withMine.length - 1];
+  const moved = last.mine - first.mine;
+  lines.push(['내 가격 ', el('b', '', `${won(first.mine)} → ${won(last.mine)}`),
+    moved ? ` (${moved > 0 ? '▲' : '▼'}${won(Math.abs(moved))})` : ' (변동 없음)']);
+  for (const [key, name] of [['rival', '감시 최저가'], ['avg', `${cityName()} 평균`]]) {
+    const both = series.filter((row) => row.mine !== null && row[key] !== null);
+    if (!both.length) continue;
+    const latest = both[both.length - 1];
+    const average = both.reduce((sum, row) => sum + row.mine - row[key], 0) / both.length;
+    lines.push([`${name}보다 지금 `, el('b', '', gapText(latest.mine - latest[key])), ` · 기간 평균 ${gapText(average)}`]);
+  }
+  lines.forEach((parts, index) => {
+    if (index) box.append(el('br'));
+    box.append(...parts);
+  });
+}
+
+function renderTrendTable(series, now) {
+  const body = $('trendRows');
+  body.replaceChildren();
+  for (const row of [...series].reverse()) {
+    const label = dayLabel(row.date, now);
+    const tr = el('tr');
+    tr.dataset.date = row.date;
+    const dateCell = el('td', label.weekend === 'sun' ? 'sun' : '', `${label.month}/${label.day} (${label.weekday})`);
+    const rivalCell = el('td', '', row.rival === null ? '–' : won(row.rival));
+    if (row.rivalId) rivalCell.title = stationName(row.rivalId);
+    const gap = row.mine !== null && row.rival !== null ? row.mine - row.rival : null;
+    const gapCell = el('td', gap > 0 ? 'gap-up' : '', gap === null ? '–' : signed(gap));
+    if (gap !== null) gapCell.title = `내 가격이 감시 최저가보다 ${gapText(gap)}`;
+    tr.append(
+      dateCell,
+      el('td', '', row.mine === null ? '–' : won(row.mine)),
+      rivalCell,
+      gapCell,
+      el('td', '', row.avg === null ? '–' : won(row.avg))
+    );
+    body.append(tr);
+  }
+}
+
+/* ───────── CSV 저장 ───────── */
+
+function downloadCsv(name, rows) {
+  // 엑셀이 한글을 바로 읽도록 BOM을 붙인다.
+  const blob = new Blob([`\uFEFF${toCsv(rows)}`], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = el('a');
+  link.href = url;
+  link.download = name;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
+$('exportChanges').addEventListener('click', () => {
+  const { settings, state } = view;
+  const events = filteredEvents();
+  if (!events.length) {
+    view.message = '저장할 변동 기록이 없습니다.';
+    render();
+    return;
+  }
+  const tab = view.changeTab === ALL_TAB ? '전체' : view.changeTab === TAXFREE_TAB ? '면세유' : PRODUCTS[view.changeTab];
+  const rows = eventsCsvRows(events, {
+    stations: state.stations,
+    watched: settings.watched,
+    myId: settings.station ? settings.station.id : null
+  });
+  downloadCsv(`가격변동_${tab}${view.scope === 'watched' ? '_감시' : ''}_${kstDate(Date.now())}.csv`, rows);
+});
+
+$('exportTrend').addEventListener('click', () => {
+  const series = view.trendSeries;
+  if (!series.some((row) => row.mine !== null || row.rival !== null || row.avg !== null)) {
+    view.message = '저장할 추이 기록이 없습니다.';
+    render();
+    return;
+  }
+  const rows = [['날짜', '내 가격', '감시 주유소 최저가', '최저가 주유소', '차이(내 가격-감시 최저가)', `${cityName()} 평균`]];
+  for (const row of series) {
+    rows.push([
+      row.date, row.mine ?? '', row.rival ?? '', stationName(row.rivalId),
+      row.mine !== null && row.rival !== null ? row.mine - row.rival : '',
+      row.avg === null ? '' : Math.round(row.avg * 100) / 100
+    ]);
+  }
+  downloadCsv(`가격추이_${PRODUCTS[view.trendTab]}_${view.range}일_${kstDate(Date.now())}.csv`, rows);
+});
+
+$('rangeSeg').addEventListener('click', (event) => {
+  const range = Number(event.target.dataset.range);
+  if (!RANGES.includes(range) || range === view.range) return;
+  view.range = range;
+  savePrefs();
+  render();
+});
 
 let programmaticScroll = false;
 
@@ -672,7 +981,8 @@ chrome.storage.onChanged.addListener((changes, area) => {
 
 // 팝업을 열 때 아직 안 본 감시 주유소 변동을 기억해 두고 "새"로 표시한다. 새 변동이 있으면 변동 보기로 연다.
 const prefs = readPrefs();
-view.mode = prefs.mode === 'changes' ? 'changes' : 'prices';
+view.mode = ['changes', 'trend'].includes(prefs.mode) ? prefs.mode : 'prices';
+view.range = RANGES.includes(prefs.range) ? prefs.range : 30;
 view.scope = prefs.scope === 'watched' ? 'watched' : 'all';
 const opened = await chrome.storage.local.get(['settings', 'state']);
 const unseen = (opened.state && opened.state.unseen) || 0;

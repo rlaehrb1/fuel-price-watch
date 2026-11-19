@@ -1,15 +1,21 @@
 import {
   DEFAULT_SETTINGS,
   SAFE_LIMIT,
+  areaBackfillDate,
   badgeInfo,
   bumpCalls,
   callsToday,
   defaultWatched,
+  emptyHistory,
   emptyState,
   eventText,
+  kstDate,
+  mergeArea,
   mergeSnapshot,
+  parseAreaDaily,
   parseAverages,
   parseStations,
+  recordDay,
   shouldFetch,
   watchedEvents
 } from './lib.js';
@@ -20,6 +26,8 @@ const ALARM_PERIOD_MINUTES = 15;
 const MANUAL_GAP_MS = 5 * 60 * 1000;
 const AVERAGE_RETRY_MS = 60 * 60 * 1000;
 const NOTIFICATION_ID = 'price-change';
+const AREA_RETRY_MS = 60 * 60 * 1000;
+const MAX_BACKFILL_CALLS = 14;
 
 let inflight = null;
 
@@ -61,7 +69,7 @@ async function handleMessage(message) {
     case 'listAreas':
       return { areas: await listAreas(message.sido) };
     case 'settingsChanged':
-      if (message.reset) await chrome.storage.local.set({ state: emptyState() });
+      if (message.reset) await chrome.storage.local.set({ state: emptyState(), history: emptyHistory() });
       return refresh({ force: true, ignoreGap: true });
     default:
       throw new Error('알 수 없는 요청입니다.');
@@ -97,6 +105,11 @@ async function setPaused(paused) {
 async function getSettings() {
   const { settings } = await chrome.storage.local.get('settings');
   return { ...DEFAULT_SETTINGS, ...(settings || {}) };
+}
+
+async function getHistory() {
+  const { history } = await chrome.storage.local.get('history');
+  return { ...emptyHistory(), ...(history || {}) };
 }
 
 async function getState() {
@@ -178,8 +191,10 @@ async function runRefresh({ force, ignoreGap = false }) {
     const alerts = watchedEvents(events, watched);
     next.unseen = (state.unseen || 0) + alerts.length;
     await chrome.storage.local.set({ state: next });
+    await chrome.storage.local.set({ history: recordDay(await getHistory(), next, { ...settings, watched }, now) });
     await updateBadge(next, { ...settings, watched });
     if (settings.notify && alerts.length) notify(alerts);
+    await updateAreaHistory(settings, now).catch(() => {});
     return { changed: events.length };
   } catch (error) {
     const failed = { ...(await getState()), lastError: { at: now, message: describe(error) } };
@@ -243,6 +258,51 @@ async function retryAverage(settings, state, now) {
     state: { ...latest, averageTriedAt: now, average: { ...latest.average, ...average } }
   });
   return { skipped: true, average: Object.keys(average).length > 0 };
+}
+
+// 시·군 일일 평균(오피넷 확정값). 하루 한 번 최근 7일을 받고, 처음에는 90일 전까지 7일씩 거슬러 채운다.
+async function updateAreaHistory(settings, now) {
+  if (!settings.city || !settings.apiKey) return;
+  const code = settings.city.code;
+  const today = kstDate(now);
+  let history = await getHistory();
+  if (history.areaCode !== code) history = mergeArea(history, {}, code);
+  const needsRecent = history.areaUpdatedOn !== today;
+  if (!needsRecent && !areaBackfillDate(history, now)) return;
+  if (history.areaTriedAt && now - history.areaTriedAt < AREA_RETRY_MS) return;
+  history = { ...history, areaTriedAt: now };
+  await chrome.storage.local.set({ history });
+  try {
+    if (needsRecent) {
+      const daily = parseAreaDaily(await callApi('areaAvgRecentPrice.do', { area: code }, settings.apiKey));
+      if (Object.keys(daily).length) history = { ...mergeArea(history, daily, code), areaUpdatedOn: today };
+    }
+    for (let calls = 0; calls < MAX_BACKFILL_CALLS; calls += 1) {
+      const date = areaBackfillDate(history, now);
+      if (!date) break;
+      const daily = parseAreaDaily(await callApi('dateAreaAvgRecentPrice.do', { area: code, date }, settings.apiKey));
+      const before = Object.keys(history.area).length;
+      history = mergeArea(history, daily, code);
+      // 더 오래된 날짜가 오지 않으면 오피넷에 남은 자료가 없는 것으로 보고 그만 채운다.
+      if (Object.keys(history.area).length === before) {
+        history = { ...history, areaBackfillDone: true };
+        break;
+      }
+    }
+  } finally {
+    // 그사이 저장된 하루 기록(days)은 살리고 평균만 바꾼다.
+    const latest = await getHistory();
+    await chrome.storage.local.set({
+      history: {
+        ...latest,
+        area: history.area,
+        areaCode: history.areaCode,
+        areaUpdatedOn: history.areaUpdatedOn,
+        areaBackfillDone: history.areaBackfillDone,
+        areaTriedAt: history.areaTriedAt
+      }
+    });
+  }
 }
 
 async function updateBadge(state, settings) {

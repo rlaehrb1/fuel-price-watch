@@ -2,6 +2,15 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   SLOT_DELAY_MS,
+  areaBackfillDate,
+  dailySeries,
+  eventsCsvRows,
+  lastDays,
+  mergeArea,
+  parseAreaDaily,
+  pruneEvents,
+  recordDay,
+  toCsv,
   badgeInfo,
   bumpCalls,
   callsPerCheck,
@@ -224,4 +233,72 @@ test('날짜 칸은 오늘에서 끝나고 7~14일 사이다', () => {
   assert.equal(long.length, 14);
   assert.equal(long[0], '2026-11-06');
   assert.equal(dayRange('2026-11-01', kst('2026-11-03T01:00:00'))[0], '2026-10-28');
+});
+
+test('변동 기록은 90일 동안 남기고 그보다 오래된 날은 지운다', () => {
+  const now = kst('2026-11-19T10:00:00');
+  const events = [
+    { at: kst('2026-11-19T09:10:00'), id: 'A2' },
+    { at: kst('2026-08-22T01:10:00'), id: 'A3' },
+    { at: kst('2026-08-21T23:59:00'), id: 'A4' }
+  ];
+  assert.deepEqual(pruneEvents(events, now).map((event) => event.id), ['A2', 'A3']);
+});
+
+test('CSV는 따옴표와 쉼표를 지키고 감시 여부를 적는다', () => {
+  const rows = eventsCsvRows(
+    [{ at: kst('2026-11-19T09:10:00'), id: 'A2', name: '가, 나', prod: 'B027', from: 1797, to: 1787 }],
+    { stations: { A2: { name: '가, 나', brand: 'SKE', dist: 226 } }, watched: ['A2'], myId: ME }
+  );
+  const csv = toCsv(rows);
+  assert.equal(csv.split(String.fromCharCode(13, 10))[1], '2026-11-19,09:10,"가, 나",SK에너지,226,휘발유,1797,1787,-10,감시');
+});
+
+test('하루 기록은 오늘 칸을 덮어쓰고 내 주유소와 감시 주유소 가격만 남긴다', () => {
+  const { state } = firstSnapshot();
+  const settings = { products: ['B027'], station: { id: ME }, watched: ['A2'] };
+  const history = recordDay(null, state, settings, kst('2026-11-10T09:10:00'));
+  assert.deepEqual(history.days['2026-11-10'].B027, { p: { A1: 1799, A2: 1787 }, avg: 1832.77, min: 1787 });
+});
+
+test('시·군 일일 평균을 읽고, 지역이 바뀌면 이전 평균을 버린다', () => {
+  const daily = parseAreaDaily({ RESULT: { OIL: [
+    { DATE: '20261118', PRODCD: 'B027', PRICE: '1830.5' },
+    { DATE: '20261118', PRODCD: 'K015', PRICE: '1000' },
+    { DATE: '20261117', PRODCD: 'D047', PRICE: 1700 }
+  ] } });
+  assert.deepEqual(daily, { '2026-11-18': { B027: 1830.5 }, '2026-11-17': { D047: 1700 } });
+  const merged = mergeArea(null, daily, '0601');
+  assert.equal(merged.area['2026-11-18'].B027, 1830.5);
+  assert.deepEqual(mergeArea(merged, {}, '0602').area, {});
+  const now = kst('2026-11-19T10:00:00');
+  assert.equal(areaBackfillDate(merged, now), '20261116');
+  assert.equal(areaBackfillDate(mergeArea(null, { '2026-08-20': { B027: 1 } }, '0601'), now), null);
+});
+
+test('날짜별 추이는 지금 가격에서 변동을 되돌려 그날 마지막 가격을 구한다', () => {
+  const now = kst('2026-11-19T10:00:00');
+  const state = {
+    ...emptyState(),
+    fetchedAt: now,
+    prices: { B027: { A1: 1790, A2: 1780, A3: 1800 } },
+    average: { B027: { price: 1825, diff: 0 } },
+    events: [
+      { at: kst('2026-11-19T09:10:00'), id: 'A2', prod: 'B027', from: 1795, to: 1780 },
+      { at: kst('2026-11-18T12:10:00'), id: 'A1', prod: 'B027', from: 1800, to: 1790 },
+      { at: kst('2026-11-17T09:10:00'), id: 'A3', prod: 'B027', from: 1790, to: 1800 }
+    ]
+  };
+  const history = {
+    days: { '2026-11-15': { B027: { p: { A1: 1810, A2: 1805 }, avg: 1840, min: 1790 } } },
+    area: { '2026-11-18': { B027: 1828 } }
+  };
+  const series = dailySeries(state, history, 'B027', { myId: ME, watched: ['A2', 'A3'], dates: lastDays(now, 5), now });
+  assert.deepEqual(series.map((row) => [row.date, row.mine, row.rival, row.rivalId, row.avg]), [
+    ['2026-11-15', 1810, 1805, 'A2', 1840],
+    ['2026-11-16', null, null, null, null],
+    ['2026-11-17', 1800, 1795, 'A2', null],
+    ['2026-11-18', 1790, 1795, 'A2', 1828],
+    ['2026-11-19', 1790, 1780, 'A2', 1825]
+  ]);
 });
